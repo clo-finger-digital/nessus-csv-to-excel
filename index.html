@@ -5,16 +5,15 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
     <title>Nessus Follow-up Plan Hub</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.58.0/build/stlite.css" />
+    <link rel="stylesheet" href="https://unpkg.com/@stlite/mountable@0.58.0/build/stlite.css" />
   </head>
   <body>
     <div id="root"></div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.58.0/build/stlite.js"></script>
+    <script src="https://unpkg.com/@stlite/mountable@0.58.0/build/stlite.js"></script>
     <script>
       stlite.mount({
-        // Forces client-side browser virtual machines to pull data science modules on startup
-        requirements: ["pandas", "openpyxl"],
+        requirements: ["pandas", "openpyxl"], 
         entrypoint: "app.py",
         files: {
           "app.py": {
