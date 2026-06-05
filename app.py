@@ -212,4 +212,180 @@ else:
         st.sidebar.caption(f"ZAP HTMLs ({len(st.session_state['logged_zap_files'])} files)")
 
     nessus_df = st.session_state["nessus_dataset"].copy()
-    zap_
+    zap_df = st.session_state["zap_dataset"].copy()
+    
+    processed_tracks = []
+    
+    # --- Process Nessus Memory Pool ---
+    if not nessus_df.empty:
+        for field in ["See Also", "Synopsis", "Solution", "Output", "Name", "Host"]:
+            nessus_df[field] = nessus_df[field].fillna("").astype(str).str.strip()
+            
+        nessus_df = nessus_df.dropna(subset=["Risk", "Host", "Name"])
+        nessus_df = nessus_df[~nessus_df["Name"].str.contains(r"certificate", case=False, na=False)]
+        nessus_df = nessus_df[~nessus_df["Name"].str.contains(r"icmp.*timestamp", case=False, na=False)]
+        nessus_df["Risk_Cleaned"] = nessus_df["Risk"].astype(str).str.strip()
+        nessus_df = nessus_df[~nessus_df["Risk_Cleaned"].str.lower().isin(["none", "informational", "0", "nan", ""])]
+        
+        if not nessus_df.empty:
+            nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
+            nessus_df = nessus_df.sort_values(by=["Host", "Protocol", "Port", "Family", "Ver_Tuple"], ascending=[True, True, True, True, False])
+            deduped_nessus = nessus_df.drop_duplicates(subset=["Host", "Protocol", "Port", "Family"], keep="first")
+            
+            grouped_nessus = deduped_nessus.groupby(["Protocol", "Port", "Name"], dropna=False)
+            for (protocol, port, name), group in grouped_nessus:
+                first_row = group.iloc[0]
+                hosts_str = "\n".join(sorted(group["Host"].unique()))
+                
+                r_lower = str(first_row["Risk_Cleaned"]).lower()
+                impact = 3 if 'critical' in r_lower or 'high' in r_lower else (2 if 'medium' in r_lower else 1)
+                likelihood = 2 if impact >= 2 else 1
+                
+                processed_tracks.append({
+                    "Source": "Nessus", "System/Asset ID": hosts_str, "Protocol": protocol, "Port": port,
+                    "Security Domain Area": "Operation Security", "Risk Name/Observation": name,
+                    "Vulnerability\n/Threat": first_row["Synopsis"], "Action plan": first_row["Solution"],
+                    "Impact": impact, "Likelihood": likelihood, "Output": first_row["Output"], "Reference": first_row["See Also"]
+                })
+                
+    # --- Process ZAP HTML Memory Pool ---
+    if not zap_df.empty:
+        for field in ["See Also", "Synopsis", "Solution", "Output", "Name", "Host", "Risk"]:
+            zap_df[field] = zap_df[field].fillna("").astype(str).str.strip()
+            
+        zap_df = zap_df.dropna(subset=["Risk", "Host", "Name"])
+        zap_df = zap_df[~zap_df["Name"].str.contains(r"certificate", case=False, na=False)]
+        zap_df = zap_df[~zap_df["Name"].str.contains(r"icmp.*timestamp", case=False, na=False)]
+        
+        # --- SKIP CONDITION 2: Double-check and drop generic Low rows from state pool ---
+        zap_df = zap_df[~zap_df["Risk"].str.lower().isin(["low", "none", "informational", "0", "nan", ""])]
+        
+        if not zap_df.empty:
+            grouped_zap = zap_df.groupby(["Protocol", "Port", "Name"], dropna=False)
+            for (protocol, port, name), group in grouped_zap:
+                first_row = group.iloc[0]
+                urls_str = "\n".join(sorted(group["Host"].unique()))
+                outputs_str = "\n".join([out for out in group["Output"].unique() if out])
+                
+                r_lower = str(first_row["Risk"]).lower()
+                conf_str = str(first_row["Confidence_Str"]).lower()
+                
+                impact = 3 if 'high' in r_lower or 'critical' in r_lower else (2 if 'medium' in r_lower else 1)
+                
+                # Formula Constraints: High=2, Medium/Low=1
+                if 'high' in conf_str or 'confirmed' in conf_str:
+                    likelihood = 2
+                else:
+                    likelihood = 1
+                
+                processed_tracks.append({
+                    "Source": "ZAP", "System/Asset ID": urls_str, "Protocol": "Nil", "Port": "Nil",
+                    "Security Domain Area": "Operation Security", "Risk Name/Observation": name,
+                    "Vulnerability\n/Threat": first_row["Synopsis"], "Action plan": first_row["Solution"],
+                    "Impact": impact, "Likelihood": likelihood, "Output": outputs_str, "Reference": first_row["See Also"]
+                })
+                
+    if not processed_tracks:
+        st.warning("No actionable vulnerabilities remaining after applying filters on current inputs.")
+    else:
+        for r in processed_tracks:
+            r["Risk Rating"] = r["Impact"] * r["Likelihood"] * systems_tier
+            r["Risk Rating/ Level"] = "Low" if r["Risk Rating"] <= 9 else ("Medium" if r["Risk Rating"] <= 18 else "High")
+            
+        nessus_final = [r for r in processed_tracks if r["Source"] == "Nessus"]
+        zap_final = [r for r in processed_tracks if r["Source"] == "ZAP"]
+        
+        nessus_final.sort(key=lambda x: x["Risk Rating"], reverse=True)
+        zap_final.sort(key=lambda x: x["Risk Rating"], reverse=True)
+        
+        excel_buffer = io.BytesIO()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Follow-up Plan"
+        
+        ws.merge_cells("D1:H1")
+        ws["D1"].value = "Follow-up Plan"
+        ws["D1"].alignment = Alignment(horizontal="left", vertical="center")
+        
+        headers_blueprint = [
+            'Observe /Findings#', 'System/Asset ID', 'Protocol', 'Port', 
+            'Risk Treatment method (Acceptance / Reduction / Avoidance / Transfer)', 
+            'Security Domain Area', 'Risk Name/Observation', 'Vulnerability\n/Threat', 
+            'Action plan', 'Risk Rating/ Level', 'Impact', 'Likelihood', 
+            'Systems Tier', 'Risk Rating', 'Target completion date\n(dd/mm/yyyy)', 
+            'Status', 'Details of follow-up actions', 'Acutal Completion date\n(dd/mm/yyyy)', 
+            'Reference', 'Output'
+        ]
+        
+        for c_idx, title_text in enumerate(headers_blueprint, start=3):
+            ws.cell(row=3, column=c_idx, value=title_text)
+            
+        total_rows_count = len(nessus_final) + len(zap_final)
+        ws.auto_filter.ref = f"C3:V{total_rows_count + 3}"
+        
+        current_write_row = 4
+        
+        for i, r_data in enumerate(nessus_final):
+            ws.cell(row=current_write_row, column=3, value=f"v{i + 1}")
+            ws.cell(row=current_write_row, column=4, value=r_data["System/Asset ID"])
+            ws.cell(row=current_write_row, column=5, value=r_data["Protocol"])
+            ws.cell(row=current_write_row, column=6, value=r_data["Port"])
+            ws.cell(row=current_write_row, column=8, value=r_data["Security Domain Area"])
+            ws.cell(row=current_write_row, column=9, value=r_data["Risk Name/Observation"])
+            ws.cell(row=current_write_row, column=10, value=r_data["Vulnerability\n/Threat"])
+            ws.cell(row=current_write_row, column=11, value=r_data["Action plan"])
+            ws.cell(row=current_write_row, column=12, value=r_data["Risk Rating/ Level"])
+            ws.cell(row=current_write_row, column=13, value=r_data["Impact"])
+            ws.cell(row=current_write_row, column=14, value=r_data["Likelihood"])
+            ws.cell(row=current_write_row, column=15, value=systems_tier)
+            ws.cell(row=current_write_row, column=16, value=r_data["Risk Rating"])
+            ws.cell(row=current_write_row, column=21, value=r_data["Reference"])
+            ws.cell(row=current_write_row, column=22, value=r_data["Output"])
+            current_write_row += 1
+            
+        for i, r_data in enumerate(zap_final):
+            ws.cell(row=current_write_row, column=3, value=f"A{i + 1}")
+            ws.cell(row=current_write_row, column=4, value=r_data["System/Asset ID"])
+            ws.cell(row=current_write_row, column=5, value=r_data["Protocol"])
+            ws.cell(row=current_write_row, column=6, value=r_data["Port"])
+            ws.cell(row=current_write_row, column=8, value=r_data["Security Domain Area"])
+            ws.cell(row=current_write_row, column=9, value=r_data["Risk Name/Observation"])
+            ws.cell(row=current_write_row, column=10, value=r_data["Vulnerability\n/Threat"])
+            ws.cell(row=current_write_row, column=11, value=r_data["Action plan"])
+            ws.cell(row=current_write_row, column=12, value=r_data["Risk Rating/ Level"])
+            ws.cell(row=current_write_row, column=13, value=r_data["Impact"])
+            ws.cell(row=current_write_row, column=14, value=r_data["Likelihood"])
+            ws.cell(row=current_write_row, column=15, value=systems_tier)
+            ws.cell(row=current_write_row, column=16, value=r_data["Risk Rating"])
+            ws.cell(row=current_write_row, column=21, value=r_data["Reference"])
+            ws.cell(row=current_write_row, column=22, value=r_data["Output"])
+            current_write_row += 1
+            
+        st.success(f"Processing Complete! Consolidated entries into {total_rows_count} unique tracking rows.")
+        
+        center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
+        left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        
+        for row in ws.iter_rows(min_row=3, max_row=total_rows_count + 3, min_col=3, max_col=22):
+            for cell in row:
+                if cell.column in [3, 5, 6, 8, 12, 13, 14, 15, 16]:
+                    cell.alignment = center_align
+                else:
+                    cell.alignment = left_align
+                    
+        column_widths = {
+            'C': 18, 'D': 25, 'E': 10, 'F': 10, 'G': 15, 'H': 18, 'I': 35, 'J': 45, 'K': 50, 
+            'L': 18, 'M': 10, 'N': 10, 'O': 12, 'P': 12, 'Q': 15, 'R': 12, 'S': 20, 'T': 15, 'U': 30, 'V': 45
+        }
+        for col_letter, width in column_widths.items():
+            ws.column_dimensions[col_letter].width = width
+            
+        wb.save(excel_buffer)
+        
+        st.write("---")
+        st.download_button(
+            label="Download Structured Excel Follow-up Plan",
+            data=excel_buffer.getvalue(),
+            file_name=f"Follow up Plan - {project_name}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
