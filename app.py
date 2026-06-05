@@ -39,21 +39,18 @@ def get_vulnerability_family_and_version(name_str):
 
 def parse_zap_html(file_bytes):
     """
-    Robust hierarchical parser for Checkmarx/OWASP ZAP HTML reports.
-    Explicitly decodes binary inputs and references native ID attributes 
-    to prevent string classification collisions.
+    Hierarchical parser optimized for Checkmarx/OWASP ZAP HTML report architectures.
+    Decodes strings directly and references native list IDs to avoid parsing anomalies.
     """
-    # Force clean character decoding for predictable browser-side lookups
     html_text = file_bytes.decode('utf-8', errors='ignore')
     soup = BeautifulSoup(html_text, 'html.parser')
     zap_rows = []
     
-    # Locate all list item category groupings containing explicit risk/confidence definitions
+    # Locate all structural category headings with integrated metrics
     risk_groups = soup.find_all('li', id=lambda x: x and 'risk-' in x and 'confidence-' in x)
     
     for r_group in risk_groups:
         id_str = r_group.get('id', '')
-        # Isolate numerical scales directly from element IDs (e.g., alerts--risk-2-confidence-3)
         match = re.search(r'risk-(\d)-confidence-(\d)', id_str)
         if not match:
             continue
@@ -61,19 +58,16 @@ def parse_zap_html(file_bytes):
         risk_num = int(match.group(1))
         conf_num = int(match.group(2))
         
-        # Map numerical keys to descriptive strings for pipeline compatibility
         risk_map = {3: "High", 2: "Medium", 1: "Low", 0: "Informational"}
         conf_map = {3: "High", 2: "Medium", 1: "Low"}
         
         risk_val = risk_map.get(risk_num, "Low")
         conf_val = conf_map.get(conf_num, "Low")
         
-        # Traverse through alert category headings (h5)
         h5_elements = r_group.find_all('h5')
         for h5 in h5_elements:
             alert_title = h5.get_text().strip()
-            # Clean off any structural instance count notations, such as " (1)"
-            alert_title = re.sub(r'\s*\(\d+\)\s*$', '', alert_title)
+            alert_title = re.sub(r'\s*\(\d+\)\s*$', '', alert_title) # Strip instance suffixes like ' (1)'
             
             parent_li = h5.find_parent('li')
             if not parent_li:
@@ -272,7 +266,7 @@ else:
                 
                 impact = 3 if 'high' in r_lower or 'critical' in r_lower else (2 if 'medium' in r_lower else 1)
                 
-                # Dynamic Scale: High/Confirmed = 2, Medium/Low = 1
+                # Formula Constraints: High=2, Medium/Low=1
                 if 'high' in conf_str or 'confirmed' in conf_str:
                     likelihood = 2
                 else:
