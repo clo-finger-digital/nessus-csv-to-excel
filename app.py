@@ -3,6 +3,7 @@ import pandas as pd
 import openpyxl
 import io
 import re
+from datetime import datetime
 from bs4 import BeautifulSoup
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment
@@ -140,11 +141,13 @@ if "logged_zap_files" not in st.session_state:
 
 st.sidebar.header("App Settings")
 
-# Default identifier is blank; fallback string handle handles dynamic export string formatting if left empty.
+# --- REMOVED DEFAULT "DH" VALUE ---
+# The input text is completely blank by default, displaying only the dark grey placeholder text
 project_name = st.sidebar.text_input("Project Name / Identifier", value="", placeholder="Enter project identifier...")
 project_suffix = project_name.strip() if project_name.strip() else "Untitled Project"
 
 try:
+    # Systems Tier default value selector parameter remains 2
     systems_tier = int(st.sidebar.number_input("Systems Tier (Integer Value)", min_value=1, max_value=10, value=2, step=1))
 except ValueError:
     systems_tier = 1
