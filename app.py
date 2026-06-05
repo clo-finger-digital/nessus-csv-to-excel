@@ -39,109 +39,123 @@ def get_vulnerability_family_and_version(name_str):
 
 def parse_zap_html(file_bytes):
     """
-    Parses an OWASP ZAP HTML report. Extracts alert rows, maps numerical matrices,
-    and isolates HTTP status lines/response headers into the output schema.
+    Hierarchical parser optimized for Checkmarx/OWASP ZAP HTML report architectures.
+    Traverses nested list elements down to individual alerts tables.
     """
     soup = BeautifulSoup(file_bytes, 'html.parser')
     zap_rows = []
     
-    # Locate all standalone alert detail containers
-    alert_containers = soup.find_all(['li', 'div'], id=lambda x: x and x.startswith('alert-type-'))
-    
-    for container in alert_containers:
-        title_header = container.find(['h4', 'h3'])
-        if not title_header:
-            continue
-        alert_title = title_header.get_text().strip()
+    # 1. Target the core parent alerts section block container
+    alerts_section = soup.find('section', id='alerts')
+    if not alerts_section:
+        # Fallback to general lookups if section wrappers are stripped
+        alerts_section = soup
         
-        meta_table = container.find('table', class_='alert-types-table')
-        if not meta_table:
-            continue
+    # 2. Locate each individual risk/confidence category block grouping
+    risk_groups = alerts_section.find_all('li', id=lambda x: x and x.startswith('alerts--risk-'))
+    if not risk_groups:
+        # Try finding any standard list items with risk headers if ID prefixes differ
+        risk_groups = [h3.find_parent('li') for h3 in alerts_section.find_all('h3') if h3.find_parent('li')]
+        
+    for r_group in risk_groups:
+        # Parse global Risk and Confidence parameters out of the group's h3 header
+        h3_text = ""
+        h3_elem = r_group.find('h3')
+        if h3_elem:
+            h3_text = h3_elem.get_text().lower()
             
-        row_template = {
-            "Source_Type": "ZAP", "Risk": "", "Confidence_Str": "", 
-            "Host": "", "Protocol": "tcp", "Port": "0", 
-            "Name": alert_title, "Synopsis": "", "Solution": "", 
-            "See Also": "", "Output": ""
-        }
-        
-        th_elements = meta_table.find_all('th', scope='row')
-        for th in th_elements:
-            label = th.get_text().strip().lower()
-            td = th.find_next('td')
-            if not td:
+        risk_val = "Low"
+        if "critical" in h3_text or "high" in h3_text:
+            risk_val = "High"
+        elif "medium" in h3_text:
+            risk_val = "Medium"
+            
+        conf_val = "Low"
+        if "high" in h3_text or "confirmed" in h3_text:
+            conf_val = "High"
+        elif "medium" in h3_text:
+            conf_val = "Medium"
+            
+        # 3. Traverse down to individual alert vulnerability headers (h5)
+        h5_elements = r_group.find_all('h5')
+        for h5 in h5_elements:
+            alert_title = h5.get_text().strip()
+            
+            # 4. Each finding instance block sits within a list sibling element containing an instances details block
+            parent_li = h5.find_parent('li')
+            if not parent_li:
                 continue
                 
-            if 'risk' in label:
-                row_template["Risk"] = td.get_text().split('(')[0].strip()
-            elif 'confidence' in label:
-                row_template["Confidence_Str"] = td.get_text().split('(')[0].strip()
-            elif 'description' in label:
-                row_template["Synopsis"] = td.get_text().strip()
-            elif 'solution' in label:
-                row_template["Solution"] = td.get_text().strip()
-            elif 'reference' in label:
-                links = [a['href'] for a in td.find_all('a', href=True)]
-                row_template["See Also"] = "\n".join(links)
+            # Locate all standalone instance details blocks for this specific alert category
+            tables = parent_li.find_all('table', class_='alerts-table')
+            for table in tables:
+                row_data = {
+                    "Source_Type": "ZAP", "Risk": risk_val, "Confidence_Str": conf_val,
+                    "Host": "GET https://localhost", "Protocol": "tcp", "Port": "443",
+                    "Name": alert_title, "Synopsis": "", "Solution": "", "See Also": "", "Output": ""
+                }
                 
-        # Dig into inner instance breakdowns
-        instances_table = container.find_next('table', class_='alert-instances-table')
-        if instances_table:
-            headers_th = [th.get_text().strip().lower() for th in instances_table.find_all('th')]
-            url_idx, resp_idx = -1, -1
-            
-            for i, h_text in enumerate(headers_th):
-                if 'url' in h_text or 'method' in h_text:
-                    url_idx = i
-                elif 'response' in h_text or 'header' in h_text:
-                    resp_idx = i
+                # Look upwards for the immediate summary line containing the target request URL details
+                details_container = table.find_parent('details')
+                if details_container:
+                    summary_elem = details_container.find('summary')
+                    if summary_elem:
+                        url_span = summary_elem.find('span', class_='request-method-n-url')
+                        if url_span:
+                            row_data["Host"] = url_span.get_text().strip()
+                        else:
+                            row_data["Host"] = summary_elem.get_text().strip()
+                else:
+                    # Alternative lookup mechanism: trace preceding sibling boundaries
+                    prev_details = table.find_previous('details')
+                    if prev_details:
+                        summary_elem = prev_details.find('summary')
+                        if summary_elem:
+                            row_data["Host"] = summary_elem.get_text().strip()
+                            
+                # Isolate target ports from extracted URL path strings cleanly
+                host_str_clean = row_data["Host"].replace('http://', '').replace('https://', '')
+                if 'http://' in row_data["Host"].lower():
+                    row_data["Port"] = "80"
+                port_match = re.search(r':(\d+)', host_str_clean)
+                if port_match:
+                    row_data["Port"] = port_match.group(1)
                     
-            rows_tr = instances_table.find_all('tr')[1:]
-            for tr in rows_tr:
-                tds = tr.find_all('td')
-                if not tds:
-                    continue
-                    
-                instance_row = row_template.copy()
-                
-                # Extract clean full paths (e.g., 'GET https://192.168.4.6:8098/mgr/static/css')
-                if url_idx != -1 and url_idx < len(tds):
-                    url_raw = tds[url_idx].get_text().strip()
-                    instance_row["Host"] = url_raw
-                    
-                    if 'https://' in url_raw:
-                        instance_row["Port"] = "443"
-                    elif 'http://' in url_raw:
-                        instance_row["Port"] = "80"
-                    port_match = re.search(r':(\d+)', url_raw.replace('http://','').replace('https://',''))
-                    if port_match:
-                        instance_row["Port"] = port_match.group(1)
+                # 5. Extract core parameters out of the active alert row tables
+                tr_elements = table.find_all('tr')
+                for tr in tr_elements:
+                    th = tr.find('th')
+                    td = tr.find('td')
+                    if not th or not td:
+                        continue
                         
-                # Capture corresponding status lines and headers
-                if resp_idx != -1 and resp_idx < len(tds):
-                    instance_row["Output"] = tds[resp_idx].get_text().strip()
+                    label = th.get_text().strip().lower()
                     
-                if instance_row["Host"] and instance_row["Risk"]:
-                    zap_rows.append(instance_row)
-        else:
-            # Fallback block configuration if no explicit nested grid table is present
-            site_span = soup.find('span', class_=['site', 'site-name'])
-            if site_span:
-                fallback_url = site_span.get_text().strip()
-                row_template["Host"] = f"GET https://{fallback_url}" if not fallback_url.startswith('http') else f"GET {fallback_url}"
-                if '443' in fallback_url or 'https' in fallback_url:
-                    row_template["Port"] = "443"
-            if row_template["Host"] and row_template["Risk"]:
-                zap_rows.append(row_template)
-                
+                    if 'description' in label:
+                        row_data["Synopsis"] = td.get_text().strip()
+                    elif 'solution' in label:
+                        row_data["Solution"] = td.get_text().strip()
+                    elif 'reference' in label:
+                        links = [a['href'] for a in td.find_all('a', href=True)]
+                        row_data["See Also"] = "\n".join(links)
+                    elif 'response' in label:
+                        # Extract the dynamic Status line and raw header code text cleanly from the <pre> tag block
+                        pre_tag = td.find('pre')
+                        if pre_tag:
+                            row_data["Output"] = pre_tag.get_text().strip()
+                        else:
+                            row_data["Output"] = td.get_text().strip()
+                            
+                if row_data["Host"] and row_data["Risk"]:
+                    zap_rows.append(row_data)
+                    
     return pd.DataFrame(zap_rows)
 
 # --- Streamlit Shell Configurations ---
 st.set_page_config(page_title="Vulnerability Follow-up Plan Hub", layout="wide")
 st.title("Consolidated Security Scan Follow-up Plan Generator")
-st.write("Upload your files into their respective categories below. The tool compiles data seamlessly into the target layout.")
+st.write("Upload files to their respective categories below. Data is processed into the target layout seamlessly.")
 
-# Initialize Separate Staging Memory Pools
 if "nessus_dataset" not in st.session_state:
     st.session_state["nessus_dataset"] = pd.DataFrame(columns=["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"])
 if "zap_dataset" not in st.session_state:
@@ -165,7 +179,6 @@ if st.sidebar.button("Reset & Clear Upload Memory"):
     st.session_state["logged_zap_files"] = set()
     st.rerun()
 
-# --- Segmented Interface Upload Layout ---
 col1, col2 = st.columns(2)
 
 with col1:
@@ -216,7 +229,7 @@ has_nessus = len(st.session_state["logged_nessus_files"]) > 0
 has_zap = len(st.session_state["logged_zap_files"]) > 0
 
 if not has_nessus and not has_zap:
-    st.info("Awaiting file context inputs. Please populate the target fields above.")
+    st.info("Awaiting file context inputs. Please populate target fields above.")
 else:
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Loaded Inventories:**")
@@ -274,6 +287,7 @@ else:
         zap_df = zap_df[~zap_df["Risk_Cleaned"].str.lower().isin(["none", "informational", "0", "nan", ""])]
         
         if not zap_df.empty:
+            # Group ZAP results strictly by Protocol, Port, and Name to handle multiline items correctly
             grouped_zap = zap_df.groupby(["Protocol", "Port", "Name"], dropna=False)
             for (protocol, port, name), group in grouped_zap:
                 first_row = group.iloc[0]
