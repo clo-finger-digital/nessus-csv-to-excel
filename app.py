@@ -41,6 +41,7 @@ def parse_zap_html(file_bytes):
     """
     Hierarchical parser optimized for Checkmarx/OWASP ZAP HTML report architectures.
     Decodes strings directly and references native list IDs to avoid parsing anomalies.
+    Applies direct filtering to discard Low or Informational risks immediately.
     """
     html_text = file_bytes.decode('utf-8', errors='ignore')
     soup = BeautifulSoup(html_text, 'html.parser')
@@ -58,16 +59,20 @@ def parse_zap_html(file_bytes):
         risk_num = int(match.group(1))
         conf_num = int(match.group(2))
         
-        risk_map = {3: "High", 2: "Medium", 1: "Low", 0: "Informational"}
+        # EXCLUSION CRITERIA: Skip processing entirely if ZAP Risk is Low (1) or Informational (0)
+        if risk_num <= 1:
+            continue
+            
+        risk_map = {3: "High", 2: "Medium"}
         conf_map = {3: "High", 2: "Medium", 1: "Low"}
         
-        risk_val = risk_map.get(risk_num, "Low")
+        risk_val = risk_map.get(risk_num, "Medium")
         conf_val = conf_map.get(conf_num, "Low")
         
         h5_elements = r_group.find_all('h5')
         for h5 in h5_elements:
             alert_title = h5.get_text().strip()
-            alert_title = re.sub(r'\s*\(\d+\)\s*$', '', alert_title) # Strip instance suffixes like ' (1)'
+            alert_title = re.sub(r'\s*\(\d+\)\s*$', '', alert_title) # Strip instance counters like ' (1)'
             
             parent_li = h5.find_parent('li')
             if not parent_li:
@@ -172,7 +177,7 @@ with col1:
             st.rerun()
 
 with col2:
-    st.subheader("OWASP ZAP Data")
+    st.subheader("OWASP ZAP Data (Medium & High Only)")
     uploaded_zap = st.file_uploader("Upload OWASP ZAP HTML reports", type=["html"], accept_multiple_files=True, key="zap_input")
     if uploaded_zap:
         new_zap = False
