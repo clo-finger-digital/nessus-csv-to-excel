@@ -7,6 +7,10 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment
 
 def parse_version_string(v_str):
+    """
+    Parses a version token (e.g., '1.1.1zd' or '2.4.64') into a comparable tuple.
+    Handles alphabetical trailing versions: len('zd') > len('z'), and 'zd' > 'za'.
+    """
     match = re.match(r'^(\d+(?:\.\d+)*)([a-z]*)$', str(v_str).strip(), re.IGNORECASE)
     if match:
         nums_str, letters = match.groups()
@@ -16,12 +20,17 @@ def parse_version_string(v_str):
     return ((), 0, '')
 
 def get_vulnerability_family_and_version(name_str):
+    """
+    Identifies the product family (text before < or <=) and extracts the 
+    maximum parsed version tuple for tracking supersedence.
+    """
     name_str = str(name_str).strip()
     if '<' in name_str:
         family = name_str.split('<')[0].strip()
     elif '<=' in name_str:
         family = name_str.split('<=')[0].strip()
     else:
+        # Fallback for names without comparative boundaries: substitute numeric patches
         tokens = re.findall(r'\b\d+(?:\.\d+)+[a-z]*\b', name_str, re.IGNORECASE)
         family = name_str
         for t in tokens:
@@ -53,7 +62,7 @@ try:
 except ValueError:
     systems_tier = 1
 
-if st.sidebar.button("🧹 Reset & Clear Upload Memory"):
+if st.sidebar.button("Reset & Clear Upload Memory"):
     st.session_state["master_dataset"] = pd.DataFrame(columns=["Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also"])
     st.session_state["logged_filenames"] = set()
     st.rerun()
@@ -94,9 +103,10 @@ else:
     master_df["Synopsis"] = master_df["Synopsis"].fillna("").astype(str).str.strip()
     master_df["Solution"] = master_df["Solution"].fillna("").astype(str).str.strip()
     
-    # Cleansing & Certificate Exclusions
+    # Cleansing & Exclusions (Certificates AND ICMP Timestamp Requests)
     master_df = master_df.dropna(subset=["Risk", "Host", "Name"])
     master_df = master_df[~master_df["Name"].str.contains(r"certificate", case=False, na=False)]
+    master_df = master_df[~master_df["Name"].str.contains(r"icmp.*timestamp", case=False, na=False)]
     
     master_df["Risk_Cleaned"] = master_df["Risk"].astype(str).str.strip()
     master_df = master_df[~master_df["Risk_Cleaned"].str.lower().isin(["none", "informational", "0", "nan", ""])]
