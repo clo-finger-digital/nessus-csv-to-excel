@@ -139,7 +139,11 @@ if "logged_zap_files" not in st.session_state:
     st.session_state["logged_zap_files"] = set()
 
 st.sidebar.header("App Settings")
-project_name = st.sidebar.text_input("Project Name / Identifier", value="DH")
+
+# Default identifier is blank; fallback string handle handles dynamic export string formatting if left empty.
+project_name = st.sidebar.text_input("Project Name / Identifier", value="", placeholder="Enter project identifier...")
+project_suffix = project_name.strip() if project_name.strip() else "Untitled Project"
+
 try:
     systems_tier = int(st.sidebar.number_input("Systems Tier (Integer Value)", min_value=1, max_value=10, value=2, step=1))
 except ValueError:
@@ -257,7 +261,6 @@ else:
         zap_df = zap_df[~zap_df["Name"].str.contains(r"certificate", case=False, na=False)]
         zap_df = zap_df[~zap_df["Name"].str.contains(r"icmp.*timestamp", case=False, na=False)]
         
-        # --- SKIP CONDITION 2: Double-check and drop generic Low rows from state pool ---
         zap_df = zap_df[~zap_df["Risk"].str.lower().isin(["low", "none", "informational", "0", "nan", ""])]
         
         if not zap_df.empty:
@@ -272,7 +275,6 @@ else:
                 
                 impact = 3 if 'high' in r_lower or 'critical' in r_lower else (2 if 'medium' in r_lower else 1)
                 
-                # Formula Constraints: High=2, Medium/Low=1
                 if 'high' in conf_str or 'confirmed' in conf_str:
                     likelihood = 2
                 else:
@@ -386,6 +388,6 @@ else:
         st.download_button(
             label="Download Structured Excel Follow-up Plan",
             data=excel_buffer.getvalue(),
-            file_name=f"Follow up Plan - {project_name}.xlsx",
+            file_name=f"Follow up Plan - {project_suffix}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
