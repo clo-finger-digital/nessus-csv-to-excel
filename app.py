@@ -59,7 +59,8 @@ def parse_zap_html(file_bytes):
         risk_num = int(match.group(1))
         conf_num = int(match.group(2))
         
-        # EXCLUSION CRITERIA: Skip processing entirely if ZAP Risk is Low (1) or Informational (0)
+        # --- CRITICAL SKIP CONDITION ADDED HERE ---
+        # Skip processing entirely if ZAP Risk is Low (1) or Informational (0)
         if risk_num <= 1:
             continue
             
