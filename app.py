@@ -45,20 +45,15 @@ def parse_zap_html(file_bytes):
     soup = BeautifulSoup(file_bytes, 'html.parser')
     zap_rows = []
     
-    # 1. Target the core parent alerts section block container
     alerts_section = soup.find('section', id='alerts')
     if not alerts_section:
-        # Fallback to general lookups if section wrappers are stripped
         alerts_section = soup
         
-    # 2. Locate each individual risk/confidence category block grouping
     risk_groups = alerts_section.find_all('li', id=lambda x: x and x.startswith('alerts--risk-'))
     if not risk_groups:
-        # Try finding any standard list items with risk headers if ID prefixes differ
         risk_groups = [h3.find_parent('li') for h3 in alerts_section.find_all('h3') if h3.find_parent('li')]
         
     for r_group in risk_groups:
-        # Parse global Risk and Confidence parameters out of the group's h3 header
         h3_text = ""
         h3_elem = r_group.find('h3')
         if h3_elem:
@@ -76,26 +71,21 @@ def parse_zap_html(file_bytes):
         elif "medium" in h3_text:
             conf_val = "Medium"
             
-        # 3. Traverse down to individual alert vulnerability headers (h5)
         h5_elements = r_group.find_all('h5')
         for h5 in h5_elements:
             alert_title = h5.get_text().strip()
-            
-            # 4. Each finding instance block sits within a list sibling element containing an instances details block
             parent_li = h5.find_parent('li')
             if not parent_li:
                 continue
                 
-            # Locate all standalone instance details blocks for this specific alert category
             tables = parent_li.find_all('table', class_='alerts-table')
             for table in tables:
                 row_data = {
                     "Source_Type": "ZAP", "Risk": risk_val, "Confidence_Str": conf_val,
-                    "Host": "GET https://localhost", "Protocol": "tcp", "Port": "443",
+                    "Host": "GET https://localhost", "Protocol": "Nil", "Port": "Nil",
                     "Name": alert_title, "Synopsis": "", "Solution": "", "See Also": "", "Output": ""
                 }
                 
-                # Look upwards for the immediate summary line containing the target request URL details
                 details_container = table.find_parent('details')
                 if details_container:
                     summary_elem = details_container.find('summary')
@@ -106,22 +96,12 @@ def parse_zap_html(file_bytes):
                         else:
                             row_data["Host"] = summary_elem.get_text().strip()
                 else:
-                    # Alternative lookup mechanism: trace preceding sibling boundaries
                     prev_details = table.find_previous('details')
                     if prev_details:
                         summary_elem = prev_details.find('summary')
                         if summary_elem:
                             row_data["Host"] = summary_elem.get_text().strip()
                             
-                # Isolate target ports from extracted URL path strings cleanly
-                host_str_clean = row_data["Host"].replace('http://', '').replace('https://', '')
-                if 'http://' in row_data["Host"].lower():
-                    row_data["Port"] = "80"
-                port_match = re.search(r':(\d+)', host_str_clean)
-                if port_match:
-                    row_data["Port"] = port_match.group(1)
-                    
-                # 5. Extract core parameters out of the active alert row tables
                 tr_elements = table.find_all('tr')
                 for tr in tr_elements:
                     th = tr.find('th')
@@ -139,7 +119,6 @@ def parse_zap_html(file_bytes):
                         links = [a['href'] for a in td.find_all('a', href=True)]
                         row_data["See Also"] = "\n".join(links)
                     elif 'response' in label:
-                        # Extract the dynamic Status line and raw header code text cleanly from the <pre> tag block
                         pre_tag = td.find('pre')
                         if pre_tag:
                             row_data["Output"] = pre_tag.get_text().strip()
@@ -154,7 +133,7 @@ def parse_zap_html(file_bytes):
 # --- Streamlit Shell Configurations ---
 st.set_page_config(page_title="Vulnerability Follow-up Plan Hub", layout="wide")
 st.title("Consolidated Security Scan Follow-up Plan Generator")
-st.write("Upload files to their respective categories below. Data is processed into the target layout seamlessly.")
+st.write("Upload your files into their respective categories below. The tool compiles data seamlessly into the target layout.")
 
 if "nessus_dataset" not in st.session_state:
     st.session_state["nessus_dataset"] = pd.DataFrame(columns=["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"])
@@ -287,7 +266,6 @@ else:
         zap_df = zap_df[~zap_df["Risk_Cleaned"].str.lower().isin(["none", "informational", "0", "nan", ""])]
         
         if not zap_df.empty:
-            # Group ZAP results strictly by Protocol, Port, and Name to handle multiline items correctly
             grouped_zap = zap_df.groupby(["Protocol", "Port", "Name"], dropna=False)
             for (protocol, port, name), group in grouped_zap:
                 first_row = group.iloc[0]
@@ -298,10 +276,15 @@ else:
                 conf_str = str(first_row["Confidence_Str"]).lower()
                 
                 impact = 3 if 'high' in r_lower or 'critical' in r_lower else (2 if 'medium' in r_lower else 1)
-                likelihood = 3 if 'high' in conf_str or 'confirmed' in conf_str else (2 if 'medium' in conf_str else 1)
+                
+                # Dynamic Multiplier Scale Rule: High/Confirmed = 2, Medium/Low = 1
+                if 'high' in conf_str or 'confirmed' in conf_str:
+                    likelihood = 2
+                else:
+                    likelihood = 1
                 
                 processed_tracks.append({
-                    "Source": "ZAP", "System/Asset ID": urls_str, "Protocol": protocol, "Port": port,
+                    "Source": "ZAP", "System/Asset ID": urls_str, "Protocol": "Nil", "Port": "Nil",
                     "Security Domain Area": "Operation Security", "Risk Name/Observation": name,
                     "Vulnerability\n/Threat": first_row["Synopsis"], "Action plan": first_row["Solution"],
                     "Impact": impact, "Likelihood": likelihood, "Output": outputs_str, "Reference": first_row["See Also"]
