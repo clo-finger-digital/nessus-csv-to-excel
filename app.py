@@ -39,41 +39,42 @@ def get_vulnerability_family_and_version(name_str):
 
 def parse_zap_html(file_bytes):
     """
-    Hierarchical parser optimized for Checkmarx/OWASP ZAP HTML report architectures.
-    Traverses nested list elements down to individual alerts tables.
+    Robust hierarchical parser for Checkmarx/OWASP ZAP HTML reports.
+    Explicitly decodes binary inputs and references native ID attributes 
+    to prevent string classification collisions.
     """
-    soup = BeautifulSoup(file_bytes, 'html.parser')
+    # Force clean character decoding for predictable browser-side lookups
+    html_text = file_bytes.decode('utf-8', errors='ignore')
+    soup = BeautifulSoup(html_text, 'html.parser')
     zap_rows = []
     
-    alerts_section = soup.find('section', id='alerts')
-    if not alerts_section:
-        alerts_section = soup
-        
-    risk_groups = alerts_section.find_all('li', id=lambda x: x and x.startswith('alerts--risk-'))
-    if not risk_groups:
-        risk_groups = [h3.find_parent('li') for h3 in alerts_section.find_all('h3') if h3.find_parent('li')]
-        
+    # Locate all list item category groupings containing explicit risk/confidence definitions
+    risk_groups = soup.find_all('li', id=lambda x: x and 'risk-' in x and 'confidence-' in x)
+    
     for r_group in risk_groups:
-        h3_text = ""
-        h3_elem = r_group.find('h3')
-        if h3_elem:
-            h3_text = h3_elem.get_text().lower()
+        id_str = r_group.get('id', '')
+        # Isolate numerical scales directly from element IDs (e.g., alerts--risk-2-confidence-3)
+        match = re.search(r'risk-(\d)-confidence-(\d)', id_str)
+        if not match:
+            continue
             
-        risk_val = "Low"
-        if "critical" in h3_text or "high" in h3_text:
-            risk_val = "High"
-        elif "medium" in h3_text:
-            risk_val = "Medium"
-            
-        conf_val = "Low"
-        if "high" in h3_text or "confirmed" in h3_text:
-            conf_val = "High"
-        elif "medium" in h3_text:
-            conf_val = "Medium"
-            
+        risk_num = int(match.group(1))
+        conf_num = int(match.group(2))
+        
+        # Map numerical keys to descriptive strings for pipeline compatibility
+        risk_map = {3: "High", 2: "Medium", 1: "Low", 0: "Informational"}
+        conf_map = {3: "High", 2: "Medium", 1: "Low"}
+        
+        risk_val = risk_map.get(risk_num, "Low")
+        conf_val = conf_map.get(conf_num, "Low")
+        
+        # Traverse through alert category headings (h5)
         h5_elements = r_group.find_all('h5')
         for h5 in h5_elements:
             alert_title = h5.get_text().strip()
+            # Clean off any structural instance count notations, such as " (1)"
+            alert_title = re.sub(r'\s*\(\d+\)\s*$', '', alert_title)
+            
             parent_li = h5.find_parent('li')
             if not parent_li:
                 continue
@@ -94,12 +95,6 @@ def parse_zap_html(file_bytes):
                         if url_span:
                             row_data["Host"] = url_span.get_text().strip()
                         else:
-                            row_data["Host"] = summary_elem.get_text().strip()
-                else:
-                    prev_details = table.find_previous('details')
-                    if prev_details:
-                        summary_elem = prev_details.find('summary')
-                        if summary_elem:
                             row_data["Host"] = summary_elem.get_text().strip()
                             
                 tr_elements = table.find_all('tr')
@@ -277,7 +272,7 @@ else:
                 
                 impact = 3 if 'high' in r_lower or 'critical' in r_lower else (2 if 'medium' in r_lower else 1)
                 
-                # Dynamic Multiplier Scale Rule: High/Confirmed = 2, Medium/Low = 1
+                # Dynamic Scale: High/Confirmed = 2, Medium/Low = 1
                 if 'high' in conf_str or 'confirmed' in conf_str:
                     likelihood = 2
                 else:
