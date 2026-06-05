@@ -13,7 +13,8 @@
     <script src="https://unpkg.com/@stlite/mountable@0.58.0/build/stlite.js"></script>
     <script>
       stlite.mount({
-        requirements: ["pandas", "openpyxl"], 
+        // Injected beautifulsoup4 so the local browser can process the ZAP report structures
+        requirements: ["pandas", "openpyxl", "beautifulsoup4"], 
         entrypoint: "app.py",
         files: {
           "app.py": {
