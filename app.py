@@ -60,7 +60,7 @@ def parse_zap_html(file_bytes):
         risk_num = int(match.group(1))
         conf_num = int(match.group(2))
         
-        # --- SKIP CONDITION: Prevent low/informational rows from parsing ---
+        # Skip processing entirely if ZAP Risk is Low (1) or Informational (0)
         if risk_num <= 1:
             continue
             
@@ -73,7 +73,7 @@ def parse_zap_html(file_bytes):
         h5_elements = r_group.find_all('h5')
         for h5 in h5_elements:
             alert_title = h5.get_text().strip()
-            alert_title = re.sub(r'\s*\(\d+\)\s*$', '', alert_title) # Strip instance counters like ' (1)'
+            alert_title = re.sub(r'\s*\(\d+\)\s*$', '', alert_title)
             
             parent_li = h5.find_parent('li')
             if not parent_li:
@@ -141,15 +141,15 @@ if "logged_zap_files" not in st.session_state:
 
 st.sidebar.header("App Settings")
 
-# Default input value is explicitly empty. Only the custom placeholder displays to the user.
+# Default input value is empty with placeholder text instructions
 project_name = st.sidebar.text_input("Project Name / Identifier", value="", placeholder="Enter project identifier...")
 project_suffix = project_name.strip() if project_name.strip() else "Untitled Project"
 
 try:
-    # Systems Tier default baseline value set explicitly to 2
-    systems_tier = int(st.sidebar.number_input("Systems Tier (Integer Value)", min_value=1, max_value=10, value=2, step=1))
+    # --- UPDATED: max_value restricted strictly from 10 to 4 ---
+    systems_tier = int(st.sidebar.number_input("Systems Tier (Integer Value)", min_value=1, max_value=4, value=2, step=1))
 except ValueError:
-    systems_tier = 1
+    systems_tier = 2
 
 if st.sidebar.button("Reset & Clear Upload Memory"):
     st.session_state["nessus_dataset"] = pd.DataFrame(columns=["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"])
@@ -277,7 +277,6 @@ else:
                 
                 impact = 3 if 'high' in r_lower or 'critical' in r_lower else (2 if 'medium' in r_lower else 1)
                 
-                # Formula Constraints: High=2, Medium/Low=1
                 if 'high' in conf_str or 'confirmed' in conf_str:
                     likelihood = 2
                 else:
