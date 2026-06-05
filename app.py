@@ -38,9 +38,14 @@ def get_vulnerability_family_and_version(name_str):
     return family, max_version
 
 def parse_zap_html(file_bytes):
+    """
+    Parses an OWASP ZAP HTML report. Extracts alert rows, maps numerical matrices,
+    and isolates HTTP status lines/response headers into the output schema.
+    """
     soup = BeautifulSoup(file_bytes, 'html.parser')
     zap_rows = []
     
+    # Locate all standalone alert detail containers
     alert_containers = soup.find_all(['li', 'div'], id=lambda x: x and x.startswith('alert-type-'))
     
     for container in alert_containers:
@@ -79,6 +84,7 @@ def parse_zap_html(file_bytes):
                 links = [a['href'] for a in td.find_all('a', href=True)]
                 row_template["See Also"] = "\n".join(links)
                 
+        # Dig into inner instance breakdowns
         instances_table = container.find_next('table', class_='alert-instances-table')
         if instances_table:
             headers_th = [th.get_text().strip().lower() for th in instances_table.find_all('th')]
@@ -98,6 +104,7 @@ def parse_zap_html(file_bytes):
                     
                 instance_row = row_template.copy()
                 
+                # Extract clean full paths (e.g., 'GET https://192.168.4.6:8098/mgr/static/css')
                 if url_idx != -1 and url_idx < len(tds):
                     url_raw = tds[url_idx].get_text().strip()
                     instance_row["Host"] = url_raw
@@ -110,16 +117,18 @@ def parse_zap_html(file_bytes):
                     if port_match:
                         instance_row["Port"] = port_match.group(1)
                         
+                # Capture corresponding status lines and headers
                 if resp_idx != -1 and resp_idx < len(tds):
                     instance_row["Output"] = tds[resp_idx].get_text().strip()
                     
                 if instance_row["Host"] and instance_row["Risk"]:
                     zap_rows.append(instance_row)
         else:
+            # Fallback block configuration if no explicit nested grid table is present
             site_span = soup.find('span', class_=['site', 'site-name'])
             if site_span:
                 fallback_url = site_span.get_text().strip()
-                row_template["Host"] = f"GET {fallback_url}"
+                row_template["Host"] = f"GET https://{fallback_url}" if not fallback_url.startswith('http') else f"GET {fallback_url}"
                 if '443' in fallback_url or 'https' in fallback_url:
                     row_template["Port"] = "443"
             if row_template["Host"] and row_template["Risk"]:
@@ -203,14 +212,12 @@ with col2:
         if new_zap:
             st.rerun()
 
-# Combine pools for shared pipeline compilation
 has_nessus = len(st.session_state["logged_nessus_files"]) > 0
 has_zap = len(st.session_state["logged_zap_files"]) > 0
 
 if not has_nessus and not has_zap:
     st.info("Awaiting file context inputs. Please populate the target fields above.")
 else:
-    # Sidebar staging inventory log tracker
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Loaded Inventories:**")
     if has_nessus:
@@ -289,7 +296,6 @@ else:
     if not processed_tracks:
         st.warning("No actionable vulnerabilities remaining after applying filters on current inputs.")
     else:
-        # Final calculations
         for r in processed_tracks:
             r["Risk Rating"] = r["Impact"] * r["Likelihood"] * systems_tier
             r["Risk Rating/ Level"] = "Low" if r["Risk Rating"] <= 9 else ("Medium" if r["Risk Rating"] <= 18 else "High")
@@ -300,7 +306,6 @@ else:
         nessus_final.sort(key=lambda x: x["Risk Rating"], reverse=True)
         zap_final.sort(key=lambda x: x["Risk Rating"], reverse=True)
         
-        # Assemble Spreadsheet Architecture
         excel_buffer = io.BytesIO()
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -328,7 +333,6 @@ else:
         
         current_write_row = 4
         
-        # Write Nessus lines (v1, v2...)
         for i, r_data in enumerate(nessus_final):
             ws.cell(row=current_write_row, column=3, value=f"v{i + 1}")
             ws.cell(row=current_write_row, column=4, value=r_data["System/Asset ID"])
@@ -347,7 +351,6 @@ else:
             ws.cell(row=current_write_row, column=22, value=r_data["Output"])
             current_write_row += 1
             
-        # Append ZAP lines (A1, A2...)
         for i, r_data in enumerate(zap_final):
             ws.cell(row=current_write_row, column=3, value=f"A{i + 1}")
             ws.cell(row=current_write_row, column=4, value=r_data["System/Asset ID"])
