@@ -38,24 +38,17 @@ def get_vulnerability_family_and_version(name_str):
     return family, max_version
 
 def parse_zap_html(file_bytes):
-    """
-    Parses an OWASP ZAP HTML report. Extracts alert rows, maps numerical matrices,
-    and isolates HTTP status lines/response headers into the output schema.
-    """
     soup = BeautifulSoup(file_bytes, 'html.parser')
     zap_rows = []
     
-    # ZAP HTML formats specific alert blocks under distinct alert-type list items
     alert_containers = soup.find_all(['li', 'div'], id=lambda x: x and x.startswith('alert-type-'))
     
     for container in alert_containers:
-        # Extract the main Alert title header text
         title_header = container.find(['h4', 'h3'])
         if not title_header:
             continue
         alert_title = title_header.get_text().strip()
         
-        # Locate the core metadata property table inside this alert context
         meta_table = container.find('table', class_='alert-types-table')
         if not meta_table:
             continue
@@ -86,10 +79,8 @@ def parse_zap_html(file_bytes):
                 links = [a['href'] for a in td.find_all('a', href=True)]
                 row_template["See Also"] = "\n".join(links)
                 
-        # Parse instances containing individual instances, targets, URLs, and Responses
         instances_table = container.find_next('table', class_='alert-instances-table')
         if instances_table:
-            # Gather all individual asset/request headers from instances columns
             headers_th = [th.get_text().strip().lower() for th in instances_table.find_all('th')]
             url_idx, resp_idx = -1, -1
             
@@ -99,7 +90,7 @@ def parse_zap_html(file_bytes):
                 elif 'response' in h_text or 'header' in h_text:
                     resp_idx = i
                     
-            rows_tr = instances_table.find_all('tr')[1:] # Skip column header mapping row
+            rows_tr = instances_table.find_all('tr')[1:]
             for tr in rows_tr:
                 tds = tr.find_all('td')
                 if not tds:
@@ -107,12 +98,10 @@ def parse_zap_html(file_bytes):
                     
                 instance_row = row_template.copy()
                 
-                # Extract asset identifiers from active request path URLs
                 if url_idx != -1 and url_idx < len(tds):
                     url_raw = tds[url_idx].get_text().strip()
                     instance_row["Host"] = url_raw
                     
-                    # Deduce port mappings from standard string patterns
                     if 'https://' in url_raw:
                         instance_row["Port"] = "443"
                     elif 'http://' in url_raw:
@@ -121,14 +110,12 @@ def parse_zap_html(file_bytes):
                     if port_match:
                         instance_row["Port"] = port_match.group(1)
                         
-                # Extract HTTP status configuration text parameters from the response column
                 if resp_idx != -1 and resp_idx < len(tds):
                     instance_row["Output"] = tds[resp_idx].get_text().strip()
                     
                 if instance_row["Host"] and instance_row["Risk"]:
                     zap_rows.append(instance_row)
         else:
-            # Fallback handling if no instances subgrid table is formatted for the alert
             site_span = soup.find('span', class_=['site', 'site-name'])
             if site_span:
                 fallback_url = site_span.get_text().strip()
@@ -143,12 +130,17 @@ def parse_zap_html(file_bytes):
 # --- Streamlit Shell Configurations ---
 st.set_page_config(page_title="Vulnerability Follow-up Plan Hub", layout="wide")
 st.title("Consolidated Security Scan Follow-up Plan Generator")
-st.write("Merge Nessus CSV files and ZAP HTML reports seamlessly. Computes standard risk ratings and preserves target output layouts.")
+st.write("Upload your files into their respective categories below. The tool compiles data seamlessly into the target layout.")
 
-if "master_dataset" not in st.session_state:
-    st.session_state["master_dataset"] = pd.DataFrame(columns=["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"])
-if "logged_filenames" not in st.session_state:
-    st.session_state["logged_filenames"] = set()
+# Initialize Separate Staging Memory Pools
+if "nessus_dataset" not in st.session_state:
+    st.session_state["nessus_dataset"] = pd.DataFrame(columns=["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"])
+if "zap_dataset" not in st.session_state:
+    st.session_state["zap_dataset"] = pd.DataFrame(columns=["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"])
+if "logged_nessus_files" not in st.session_state:
+    st.session_state["logged_nessus_files"] = set()
+if "logged_zap_files" not in st.session_state:
+    st.session_state["logged_zap_files"] = set()
 
 st.sidebar.header("App Settings")
 project_name = st.sidebar.text_input("Project Name / Identifier", value="DH")
@@ -158,83 +150,99 @@ except ValueError:
     systems_tier = 1
 
 if st.sidebar.button("Reset & Clear Upload Memory"):
-    st.session_state["master_dataset"] = pd.DataFrame(columns=["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"])
-    st.session_state["logged_filenames"] = set()
+    st.session_state["nessus_dataset"] = pd.DataFrame(columns=["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"])
+    st.session_state["zap_dataset"] = pd.DataFrame(columns=["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"])
+    st.session_state["logged_nessus_files"] = set()
+    st.session_state["logged_zap_files"] = set()
     st.rerun()
 
-uploaded_files = st.file_uploader("Upload raw scan data logs (Nessus CSV or ZAP HTML profiles)", type=["csv", "html"], accept_multiple_files=True)
+# --- Segmented Interface Upload Layout ---
+col1, col2 = st.columns(2)
 
-if uploaded_files:
-    new_data_loaded = False
-    
-    for uploaded_file in uploaded_files:
-        if uploaded_file.name not in st.session_state["logged_filenames"]:
-            try:
-                file_bytes = uploaded_file.read()
-                if uploaded_file.name.lower().endswith('.html'):
-                    temp_df = parse_zap_html(file_bytes)
-                else:
-                    temp_df = pd.read_csv(io.BytesIO(file_bytes), dtype={"Host": str, "Port": str})
+with col1:
+    st.subheader("Nessus Scanning Data")
+    uploaded_nessus = st.file_uploader("Upload raw Nessus CSV files", type=["csv"], accept_multiple_files=True, key="nessus_input")
+    if uploaded_nessus:
+        new_nessus = False
+        for f in uploaded_nessus:
+            if f.name not in st.session_state["logged_nessus_files"]:
+                try:
+                    temp_df = pd.read_csv(f, dtype={"Host": str, "Port": str})
                     temp_df["Source_Type"] = "Nessus"
-                    if "Output" not in temp_df.columns:
-                        temp_df["Output"] = ""
-                        
-                headers = ["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"]
-                for h in headers:
-                    if h not in temp_df.columns:
-                        temp_df[h] = ""
-                        
-                temp_df = temp_df[headers]
-                st.session_state["master_dataset"] = pd.concat([st.session_state["master_dataset"], temp_df], ignore_index=True)
-                st.session_state["logged_filenames"].add(uploaded_file.name)
-                new_data_loaded = True
-            except Exception as e:
-                st.error(f"Error parsing file configuration for '{uploaded_file.name}': {e}")
-                
-    if new_data_loaded:
-        st.rerun()
+                    headers = ["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"]
+                    for h in headers:
+                        if h not in temp_df.columns:
+                            temp_df[h] = ""
+                    st.session_state["nessus_dataset"] = pd.concat([st.session_state["nessus_dataset"], temp_df[headers]], ignore_index=True)
+                    st.session_state["logged_nessus_files"].add(f.name)
+                    new_nessus = True
+                except Exception as e:
+                    st.error(f"Error parsing Nessus file '{f.name}': {e}")
+        if new_nessus:
+            st.rerun()
 
-if not st.session_state["logged_filenames"]:
-    st.info("Awaiting input context. Please drop file reports into the entry target block above.")
+with col2:
+    st.subheader("OWASP ZAP Data")
+    uploaded_zap = st.file_uploader("Upload OWASP ZAP HTML reports", type=["html"], accept_multiple_files=True, key="zap_input")
+    if uploaded_zap:
+        new_zap = False
+        for f in uploaded_zap:
+            if f.name not in st.session_state["logged_zap_files"]:
+                try:
+                    file_bytes = f.read()
+                    temp_df = parse_zap_html(file_bytes)
+                    headers = ["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"]
+                    for h in headers:
+                        if h not in temp_df.columns:
+                            temp_df[h] = ""
+                    st.session_state["zap_dataset"] = pd.concat([st.session_state["zap_dataset"], temp_df[headers]], ignore_index=True)
+                    st.session_state["logged_zap_files"].add(f.name)
+                    new_zap = True
+                except Exception as e:
+                    st.error(f"Error parsing ZAP report '{f.name}': {e}")
+        if new_zap:
+            st.rerun()
+
+# Combine pools for shared pipeline compilation
+has_nessus = len(st.session_state["logged_nessus_files"]) > 0
+has_zap = len(st.session_state["logged_zap_files"]) > 0
+
+if not has_nessus and not has_zap:
+    st.info("Awaiting file context inputs. Please populate the target fields above.")
 else:
-    st.sidebar.success(f"Staged Files ({len(st.session_state['logged_filenames'])}):")
-    for name in sorted(st.session_state["logged_filenames"]):
-        st.sidebar.caption(f"• {name}")
-        
-    master_df = st.session_state["master_dataset"].copy()
+    # Sidebar staging inventory log tracker
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Loaded Inventories:**")
+    if has_nessus:
+        st.sidebar.caption(f"Nessus CSVs ({len(st.session_state['logged_nessus_files'])} files)")
+    if has_zap:
+        st.sidebar.caption(f"ZAP HTMLs ({len(st.session_state['logged_zap_files'])} files)")
+
+    nessus_df = st.session_state["nessus_dataset"].copy()
+    zap_df = st.session_state["zap_dataset"].copy()
     
-    # Clean string buffers cleanly
-    for field_col in ["See Also", "Synopsis", "Solution", "Output", "Name", "Host"]:
-        master_df[field_col] = master_df[field_col].fillna("").astype(str).str.strip()
-        
-    # Isolate valid rows and clear structural certificates alerts or ICMP timestamps
-    master_df = master_df.dropna(subset=["Risk", "Host", "Name"])
-    master_df = master_df[~master_df["Name"].str.contains(r"certificate", case=False, na=False)]
-    master_df = master_df[~master_df["Name"].str.contains(r"icmp.*timestamp", case=False, na=False)]
+    processed_tracks = []
     
-    master_df["Risk_Cleaned"] = master_df["Risk"].astype(str).str.strip()
-    master_df = master_df[~master_df["Risk_Cleaned"].str.lower().isin(["none", "informational", "0", "nan", ""])]
-    
-    if master_df.empty:
-        st.warning("No actionable security items remain after applying cleanup exclusions.")
-    else:
-        # Split tracking dataframes to prevent Nessus version parsing logic from crossing into ZAP strings
-        nessus_subset = master_df[master_df["Source_Type"] == "Nessus"].copy()
-        zap_subset = master_df[master_df["Source_Type"] == "ZAP"].copy()
+    # --- Process Nessus Memory Pool ---
+    if not nessus_df.empty:
+        for field in ["See Also", "Synopsis", "Solution", "Output", "Name", "Host"]:
+            nessus_df[field] = nessus_df[field].fillna("").astype(str).str.strip()
+            
+        nessus_df = nessus_df.dropna(subset=["Risk", "Host", "Name"])
+        nessus_df = nessus_df[~nessus_df["Name"].str.contains(r"certificate", case=False, na=False)]
+        nessus_df = nessus_df[~nessus_df["Name"].str.contains(r"icmp.*timestamp", case=False, na=False)]
+        nessus_df["Risk_Cleaned"] = nessus_df["Risk"].astype(str).str.strip()
+        nessus_df = nessus_df[~nessus_df["Risk_Cleaned"].str.lower().isin(["none", "informational", "0", "nan", ""])]
         
-        processed_tracks = []
-        
-        # --- Stage 1: Process Nessus Elements ---
-        if not nessus_subset.empty:
-            nessus_subset["Family"], nessus_subset["Ver_Tuple"] = zip(*nessus_subset["Name"].apply(get_vulnerability_family_and_version))
-            nessus_subset = nessus_subset.sort_values(by=["Host", "Protocol", "Port", "Family", "Ver_Tuple"], ascending=[True, True, True, True, False])
-            deduped_nessus = nessus_subset.drop_duplicates(subset=["Host", "Protocol", "Port", "Family"], keep="first")
+        if not nessus_df.empty:
+            nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
+            nessus_df = nessus_df.sort_values(by=["Host", "Protocol", "Port", "Family", "Ver_Tuple"], ascending=[True, True, True, True, False])
+            deduped_nessus = nessus_df.drop_duplicates(subset=["Host", "Protocol", "Port", "Family"], keep="first")
             
             grouped_nessus = deduped_nessus.groupby(["Protocol", "Port", "Name"], dropna=False)
             for (protocol, port, name), group in grouped_nessus:
                 first_row = group.iloc[0]
-                unique_hosts = sorted(group["Host"].unique())
-                hosts_str = "\n".join(unique_hosts)
+                hosts_str = "\n".join(sorted(group["Host"].unique()))
                 
                 r_lower = str(first_row["Risk_Cleaned"]).lower()
                 impact = 3 if 'critical' in r_lower or 'high' in r_lower else (2 if 'medium' in r_lower else 1)
@@ -247,25 +255,27 @@ else:
                     "Impact": impact, "Likelihood": likelihood, "Output": first_row["Output"], "Reference": first_row["See Also"]
                 })
                 
-        # --- Stage 2: Process ZAP HTML Elements ---
-        if not zap_subset.empty:
-            # Group ZAP logs strictly by unique matching Protocol, Port, and precise Risk Alert Name
-            grouped_zap = zap_subset.groupby(["Protocol", "Port", "Name"], dropna=False)
+    # --- Process ZAP HTML Memory Pool ---
+    if not zap_df.empty:
+        for field in ["See Also", "Synopsis", "Solution", "Output", "Name", "Host"]:
+            zap_df[field] = zap_df[field].fillna("").astype(str).str.strip()
+            
+        zap_df = zap_df.dropna(subset=["Risk", "Host", "Name"])
+        zap_df = zap_df[~zap_df["Name"].str.contains(r"certificate", case=False, na=False)]
+        zap_df = zap_df[~zap_df["Name"].str.contains(r"icmp.*timestamp", case=False, na=False)]
+        zap_df["Risk_Cleaned"] = zap_df["Risk"].astype(str).str.strip()
+        zap_df = zap_df[~zap_df["Risk_Cleaned"].str.lower().isin(["none", "informational", "0", "nan", ""])]
+        
+        if not zap_df.empty:
+            grouped_zap = zap_df.groupby(["Protocol", "Port", "Name"], dropna=False)
             for (protocol, port, name), group in grouped_zap:
                 first_row = group.iloc[0]
-                
-                # Consolidate request paths URLs vertically onto separate lines
-                unique_urls = sorted(group["Host"].unique())
-                urls_str = "\n".join(unique_urls)
-                
-                # Consolidate raw HTTP status strings or headers vertically onto separate lines
-                unique_outputs = [out for out in group["Output"].unique() if out]
-                outputs_str = "\n".join(unique_outputs)
+                urls_str = "\n".join(sorted(group["Host"].unique()))
+                outputs_str = "\n".join([out for out in group["Output"].unique() if out])
                 
                 r_lower = str(first_row["Risk_Cleaned"]).lower()
                 conf_str = str(first_row["Confidence_Str"]).lower()
                 
-                # Map integers based on configuration criteria rules
                 impact = 3 if 'high' in r_lower or 'critical' in r_lower else (2 if 'medium' in r_lower else 1)
                 likelihood = 3 if 'high' in conf_str or 'confirmed' in conf_str else (2 if 'medium' in conf_str else 1)
                 
@@ -276,29 +286,29 @@ else:
                     "Impact": impact, "Likelihood": likelihood, "Output": outputs_str, "Reference": first_row["See Also"]
                 })
                 
-        # Calculate Risk Score products across the full joined array list
+    if not processed_tracks:
+        st.warning("No actionable vulnerabilities remaining after applying filters on current inputs.")
+    else:
+        # Final calculations
         for r in processed_tracks:
             r["Risk Rating"] = r["Impact"] * r["Likelihood"] * systems_tier
             r["Risk Rating/ Level"] = "Low" if r["Risk Rating"] <= 9 else ("Medium" if r["Risk Rating"] <= 18 else "High")
             
-        # Separate systems components to group Nessus outputs on top, followed by ZAP lines
         nessus_final = [r for r in processed_tracks if r["Source"] == "Nessus"]
         zap_final = [r for r in processed_tracks if r["Source"] == "ZAP"]
         
-        # Sort internal categories descending by score
         nessus_final.sort(key=lambda x: x["Risk Rating"], reverse=True)
         zap_final.sort(key=lambda x: x["Risk Rating"], reverse=True)
         
-        # Assemble Worksheet Spreadsheet Object Architecture
+        # Assemble Spreadsheet Architecture
         excel_buffer = io.BytesIO()
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Follow-up Plan"
         
         ws.merge_cells("D1:H1")
-        title_cell = ws["D1"]
-        title_cell.value = "Follow-up Plan"
-        title_cell.alignment = Alignment(horizontal="left", vertical="center")
+        ws["D1"].value = "Follow-up Plan"
+        ws["D1"].alignment = Alignment(horizontal="left", vertical="center")
         
         headers_blueprint = [
             'Observe /Findings#', 'System/Asset ID', 'Protocol', 'Port', 
@@ -318,7 +328,7 @@ else:
         
         current_write_row = 4
         
-        # Hydrate Nessus records sequentially (v1, v2, v3...)
+        # Write Nessus lines (v1, v2...)
         for i, r_data in enumerate(nessus_final):
             ws.cell(row=current_write_row, column=3, value=f"v{i + 1}")
             ws.cell(row=current_write_row, column=4, value=r_data["System/Asset ID"])
@@ -337,7 +347,7 @@ else:
             ws.cell(row=current_write_row, column=22, value=r_data["Output"])
             current_write_row += 1
             
-        # Append ZAP logs sequentially directly beneath (A1, A2, A3...)
+        # Append ZAP lines (A1, A2...)
         for i, r_data in enumerate(zap_final):
             ws.cell(row=current_write_row, column=3, value=f"A{i + 1}")
             ws.cell(row=current_write_row, column=4, value=r_data["System/Asset ID"])
@@ -356,6 +366,8 @@ else:
             ws.cell(row=current_write_row, column=22, value=r_data["Output"])
             current_write_row += 1
             
+        st.success(f"Processing Complete! Consolidated entries into {total_rows_count} unique tracking rows.")
+        
         center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
         left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
         
