@@ -10,7 +10,7 @@ from openpyxl.styles import Alignment, Border, Side
 
 def parse_version_string(v_str):
     """
-    Cross-browser safe sorting tokenizer. Extracts calendar years, 
+    Cross-browser safe chronological sorting tokenizer. Extracts calendar years, 
     patch quarters, and semantic variants from text streams.
     """
     v_str = str(v_str).strip()
@@ -20,7 +20,6 @@ def parse_version_string(v_str):
         "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
     }
     
-    # Chronological date identification block (e.g., April 2026 CPU)
     date_match = re.search(r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b', v_str, re.IGNORECASE)
     if date_match:
         m_name, year_val = date_match.groups()
@@ -153,7 +152,7 @@ def parse_zap_html(file_bytes):
                     
     return pd.DataFrame(zap_rows)
 
-# --- Streamlit Frame Settings ---
+# --- Streamlit Shell Configurations ---
 st.set_page_config(page_title="Vulnerability Follow-up Plan Hub", layout="wide")
 st.title("Consolidated Security Scan Follow-up Plan Generator")
 st.write("Upload your files into their respective categories below. The tool compiles data seamlessly into the target layout.")
@@ -269,7 +268,7 @@ else:
         if not nessus_df.empty:
             nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
             
-            # CHRONOLOGICAL CHOSEN RANGE: Sort descending to ensure the absolute most recent patch overrides historical iterations
+            # Sort descending to guarantee the most recent patch cycle (e.g. April 2026) wins de-duplication
             nessus_df = nessus_df.sort_values(by=["Host", "Protocol", "Port", "Family", "Ver_Tuple"], ascending=[True, True, True, True, False])
             
             # Safely drop old patch versions, keeping only the highest chronological entry
@@ -339,7 +338,7 @@ else:
         ws = wb.active
         ws.title = "Follow-up Plan"
         
-        # Merge top headers without passing border metrics
+        # Merge top header cell cleanly without setting thin border lines on it
         ws.merge_cells("D1:H1")
         ws["D1"].value = "Follow-up Plan"
         ws["D1"].alignment = Alignment(horizontal="left", vertical="center")
@@ -403,11 +402,11 @@ else:
         center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
         left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
         
-        # Configure solid thin borders for standard tracking blocks
+        # Configure solid thin borders for the grid layout
         thin_border_side = Side(style='thin', color='BFBFBF')
         grid_border = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
         
-        # Run grid tracing strictly from row 3 down to the final populated row (Columns C through V)
+        # Apply solid thin borders starting strictly at Row 3 (the data headers) down to the bottom cell row
         for row in ws.iter_rows(min_row=3, max_row=total_rows_count + 3, min_col=3, max_col=22):
             for cell in row:
                 cell.border = grid_border
