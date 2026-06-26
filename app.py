@@ -87,7 +87,6 @@ def parse_zap_html(file_bytes):
             
         risk_num = int(match.group(1))
         
-        # Drop Low (1) and Informational (0) findings immediately
         if risk_num <= 1:
             continue
             
@@ -193,7 +192,6 @@ with col1:
         for f in uploaded_nessus:
             if f.name not in st.session_state["logged_nessus_files"]:
                 try:
-                    # Non-Chromium Safe Input Streaming Architecture
                     bytes_data = f.read()
                     string_io = io.StringIO(bytes_data.decode('utf-8', errors='ignore'))
                     temp_df = pd.read_csv(string_io, dtype={"Host": str, "Port": str})
@@ -267,11 +265,7 @@ else:
         
         if not nessus_df.empty:
             nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
-            
-            # Sort descending to guarantee the absolute most recent patch overrides historical iterations
             nessus_df = nessus_df.sort_values(by=["Host", "Protocol", "Port", "Family", "Ver_Tuple"], ascending=[True, True, True, True, False])
-            
-            # Safely drop old patch versions, keeping only the highest chronological entry
             deduped_nessus = nessus_df.drop_duplicates(subset=["Host", "Protocol", "Port", "Family"], keep="first")
             
             grouped_nessus = deduped_nessus.groupby(["Protocol", "Port", "Name"], dropna=False)
@@ -280,8 +274,19 @@ else:
                 hosts_str = "\n".join(sorted(group["Host"].unique()))
                 
                 r_lower = str(first_row["Risk_Cleaned"]).lower()
-                impact = 3 if 'critical' in r_lower or 'high' in r_lower else (2 if 'medium' in r_lower else 1)
-                likelihood = 2 if impact >= 2 else 1
+                
+                if 'critical' in r_lower:
+                    impact = 3
+                    likelihood = 2
+                elif 'high' in r_lower:
+                    impact = 2
+                    likelihood = 2
+                elif 'medium' in r_lower:
+                    impact = 2
+                    likelihood = 1
+                else:
+                    impact = 1
+                    likelihood = 1
                 
                 processed_tracks.append({
                     "Source": "Nessus", "System/Asset ID": hosts_str, "Protocol": protocol, "Port": port,
@@ -310,7 +315,15 @@ else:
                 r_lower = str(first_row["Risk"]).lower()
                 conf_str = str(first_row["Confidence_Str"]).lower()
                 
-                impact = 3 if 'high' in r_lower or 'critical' in r_lower else (2 if 'medium' in r_lower else 1)
+                if 'critical' in r_lower:
+                    impact = 3
+                elif 'high' in r_lower:
+                    impact = 2
+                elif 'medium' in r_lower:
+                    impact = 2
+                else:
+                    impact = 1
+                    
                 likelihood = 2 if ('high' in conf_str or 'confirmed' in conf_str) else 1
                 
                 processed_tracks.append({
@@ -325,7 +338,15 @@ else:
     else:
         for r in processed_tracks:
             r["Risk Rating"] = r["Impact"] * r["Likelihood"] * systems_tier
-            r["Risk Rating/ Level"] = "Low" if r["Risk Rating"] <= 9 else ("Medium" if r["Risk Rating"] <= 18 else "High")
+            
+            if r["Risk Rating"] == 1:
+                r["Risk Rating/ Level"] = "AOI"
+            elif r["Risk Rating"] <= 9:
+                r["Risk Rating/ Level"] = "Low"
+            elif r["Risk Rating"] <= 18:
+                r["Risk Rating/ Level"] = "Medium"
+            else:
+                r["Risk Rating/ Level"] = "High"
             
         nessus_final = [r for r in processed_tracks if r["Source"] == "Nessus"]
         zap_final = [r for r in processed_tracks if r["Source"] == "ZAP"]
@@ -338,7 +359,6 @@ else:
         ws = wb.active
         ws.title = "Follow-up Plan"
         
-        # Merge top header cell cleanly without setting thin border lines on it
         ws.merge_cells("D1:H1")
         ws["D1"].value = "Follow-up Plan"
         ws["D1"].alignment = Alignment(horizontal="left", vertical="center")
@@ -361,8 +381,9 @@ else:
         
         current_write_row = 4
         
+        # --- CHANGED: Capitalized tracking codes written directly to rows ---
         for i, r_data in enumerate(nessus_final):
-            ws.cell(row=current_write_row, column=3, value=f"v{i + 1}")
+            ws.cell(row=current_write_row, column=3, value=f"V{i + 1}")
             ws.cell(row=current_write_row, column=4, value=r_data["System/Asset ID"])
             ws.cell(row=current_write_row, column=5, value=r_data["Protocol"])
             ws.cell(row=current_write_row, column=6, value=r_data["Port"])
@@ -402,11 +423,9 @@ else:
         center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
         left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
         
-        # --- CHANGED: Color hex changed to '000000' for clean solid black lines ---
         thin_border_side = Side(style='thin', color='000000')
         grid_border = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
         
-        # Apply solid thin black borders starting strictly at Row 3 (the data headers) down to the bottom cell row
         for row in ws.iter_rows(min_row=3, max_row=total_rows_count + 3, min_col=3, max_col=22):
             for cell in row:
                 cell.border = grid_border
