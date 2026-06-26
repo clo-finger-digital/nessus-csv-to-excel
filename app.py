@@ -6,35 +6,70 @@ import re
 from datetime import datetime
 from bs4 import BeautifulSoup
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Border, Side
 
 def parse_version_string(v_str):
-    match = re.match(r'^(\d+(?:\.\d+)*)([a-z]*)$', str(v_str).strip(), re.IGNORECASE)
+    """
+    Chronological sorting helper that extracts calendar years, month phases,
+    and semantic versions from vulnerability text strings.
+    """
+    v_str = str(v_str).strip()
+    
+    # Chronological month mapping configuration
+    months = {
+        "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "jack": 6,
+        "june": 6, "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
+    }
+    
+    # Look for patterns like (April 2026 CPU) or (July 2025 CPU)
+    date_match = re.search(r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b', v_str, re.IGNORECASE)
+    if date_match:
+        m_name, year_val = date_match.groups()
+        return (int(year_val), months.get(m_name.lower(), 0), 0, '')
+
+    match = re.match(r'^(\d+(?:\.\d+)*)([a-z]*)$', v_str, re.IGNORECASE)
     if match:
         nums_str, letters = match.groups()
         nums = tuple(int(x) for x in nums_str.split('.'))
         letters = letters.lower()
-        return (nums, len(letters), letters)
-    return ((), 0, '')
+        return (0, 0, nums, letters)
+        
+    return (0, 0, (), '')
 
 def get_vulnerability_family_and_version(name_str):
+    """
+    Normalizes vulnerability strings by separating invariant technical platform names 
+    from variant patch date cycles or application versions.
+    """
     name_str = str(name_str).strip()
+    
+    # Isolate explicit inequality constraints cleanly
     if '<' in name_str:
         family = name_str.split('<')[0].strip()
     elif '<=' in name_str:
         family = name_str.split('<=')[0].strip()
     else:
-        tokens = re.findall(r'\b\d+(?:\.\d+)+[a-z]*\b', name_str, re.IGNORECASE)
-        family = name_str
-        for t in tokens:
-            family = family.replace(t, "[VERSION]")
-            
+        # Standardize calendar date indicators
+        date_pattern = r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b'
+        if re.search(date_pattern, name_str, re.IGNORECASE):
+            family = re.sub(date_pattern, "[VERSION]", name_str, flags=re.IGNORECASE)
+        else:
+            tokens = re.findall(r'\b\d+(?:\.\d+)+[a-z]*\b', name_str, re.IGNORECASE)
+            family = name_str
+            for t in tokens:
+                family = family.replace(t, "[VERSION]")
+                
+    # Extract version markers for highest rank valuation
     all_tokens = re.findall(r'\b\d+(?:\.\d+)+[a-z]*\b', name_str, re.IGNORECASE)
-    if all_tokens:
+    date_tokens = re.findall(r'\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b', name_str, re.IGNORECASE)
+    
+    if date_tokens:
+        max_version = parse_version_string(date_tokens[0])
+    elif all_tokens:
         max_token = max(all_tokens, key=parse_version_string)
         max_version = parse_version_string(max_token)
     else:
-        max_version = ((), 0, '')
+        max_version = (0, 0, (), '')
         
     return family, max_version
 
@@ -48,7 +83,6 @@ def parse_zap_html(file_bytes):
     soup = BeautifulSoup(html_text, 'html.parser')
     zap_rows = []
     
-    # Locate all structural category headings with integrated metrics
     risk_groups = soup.find_all('li', id=lambda x: x and 'risk-' in x and 'confidence-' in x)
     
     for r_group in risk_groups:
@@ -141,12 +175,10 @@ if "logged_zap_files" not in st.session_state:
 
 st.sidebar.header("App Settings")
 
-# Default input value is empty with placeholder text instructions
 project_name = st.sidebar.text_input("Project Name / Identifier", value="", placeholder="Enter project identifier...")
 project_suffix = project_name.strip() if project_name.strip() else "Untitled Project"
 
 try:
-    # --- UPDATED: max_value restricted strictly from 10 to 4 ---
     systems_tier = int(st.sidebar.number_input("Systems Tier (Integer Value)", min_value=1, max_value=4, value=2, step=1))
 except ValueError:
     systems_tier = 2
@@ -234,8 +266,13 @@ else:
         nessus_df = nessus_df[~nessus_df["Risk_Cleaned"].str.lower().isin(["none", "informational", "0", "nan", ""])]
         
         if not nessus_df.empty:
+            # Group variants by computing family and version details for each item
             nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
+            
+            # CHRONOLOGICAL DE-DUPLICATION: Sort by Host details, Protocol name, Port number, invariant family, and descending version chronology
             nessus_df = nessus_df.sort_values(by=["Host", "Protocol", "Port", "Family", "Ver_Tuple"], ascending=[True, True, True, True, False])
+            
+            # Drop obsolete historical entries and retain only the most recent version
             deduped_nessus = nessus_df.drop_duplicates(subset=["Host", "Protocol", "Port", "Family"], keep="first")
             
             grouped_nessus = deduped_nessus.groupby(["Protocol", "Port", "Name"], dropna=False)
@@ -307,6 +344,7 @@ else:
         ws = wb.active
         ws.title = "Follow-up Plan"
         
+        # Format the title layout without border configurations
         ws.merge_cells("D1:H1")
         ws["D1"].value = "Follow-up Plan"
         ws["D1"].alignment = Alignment(horizontal="left", vertical="center")
@@ -370,8 +408,16 @@ else:
         center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
         left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
         
+        # Setup clean thin grey line borders for data cells
+        thin_border_side = Side(style='thin', color='BFBFBF')
+        grid_border = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
+        
+        # Traverse entire data grid starting strictly from the header down to the last data row (Columns C through V)
         for row in ws.iter_rows(min_row=3, max_row=total_rows_count + 3, min_col=3, max_col=22):
             for cell in row:
+                # Apply solid thin borders to every cell in the grid
+                cell.border = grid_border
+                
                 if cell.column in [3, 5, 6, 8, 12, 13, 14, 15, 16]:
                     cell.alignment = center_align
                 else:
