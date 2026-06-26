@@ -5,6 +5,42 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
     <title>Security Scan Follow-up Plan Hub</title>
+    
+    <script>
+      if ('serviceWorker' in navigator) {
+        // Register a mini loopback worker to inject the strict headers required by non-Chromium WASM engines
+        const workerScript = `
+          self.addEventListener('install', () => self.skipWaiting());
+          self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
+          self.addEventListener('fetch', event => {
+            if (event.request.cache === 'only-if-cached' && event.request.mode !== 'same-origin') return;
+            event.respondWith(
+              fetch(event.request).then(response => {
+                if (response.status === 0) return response;
+                const newHeaders = new Headers(response.headers);
+                newHeaders.set('Cross-Origin-Opener-Policy', 'same-origin');
+                newHeaders.set('Cross-Origin-Embedder-Policy', 'require-corp');
+                return new Response(response.body, {
+                  status: response.status,
+                  statusText: response.statusText,
+                  headers: newHeaders
+                });
+              }).catch(e => fetch(event.request))
+            );
+          });
+        `;
+        const blob = new Blob([workerScript], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(blob);
+        
+        navigator.serviceWorker.register(workerUrl).then((reg) => {
+          if (reg.active && !window.crossOriginIsolated) {
+            // Reload once to let the service worker take control and apply headers immediately
+            window.location.reload();
+          }
+        }).catch(err => console.error("Service Worker registration failed:", err));
+      }
+    </script>
+
     <link rel="stylesheet" href="https://unpkg.com/@stlite/mountable@0.58.0/build/stlite.css" />
   </head>
   <body>
@@ -13,7 +49,6 @@
     <script src="https://unpkg.com/@stlite/mountable@0.58.0/build/stlite.js"></script>
     <script>
       stlite.mount({
-        // Combined engine requirements to boot an immutable virtual python runtime inside Firefox/Safari
         requirements: ["pandas", "openpyxl", "beautifulsoup4"], 
         entrypoint: "app.py",
         files: {
