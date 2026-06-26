@@ -10,8 +10,8 @@ from openpyxl.styles import Alignment, Border, Side
 
 def parse_version_string(v_str):
     """
-    Chronological sorting helper that extracts calendar years, month phases,
-    and semantic versions from vulnerability text strings. Safe across all browser JS engines.
+    Cross-browser safe sorting tokenizer. Extracts calendar years, 
+    patch quarters, and semantic variants from text streams.
     """
     v_str = str(v_str).strip()
     
@@ -20,6 +20,7 @@ def parse_version_string(v_str):
         "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
     }
     
+    # Chronological date identification block (e.g., April 2026 CPU)
     date_match = re.search(r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b', v_str, re.IGNORECASE)
     if date_match:
         m_name, year_val = date_match.groups()
@@ -36,8 +37,8 @@ def parse_version_string(v_str):
 
 def get_vulnerability_family_and_version(name_str):
     """
-    Normalizes vulnerability strings by separating invariant platform names 
-    from variant patch date cycles or application versions.
+    Normalizes scan definitions by isolating platform names from chronological 
+    patch sequences or application version increments.
     """
     name_str = str(name_str).strip()
     
@@ -70,8 +71,8 @@ def get_vulnerability_family_and_version(name_str):
 
 def parse_zap_html(file_bytes):
     """
-    Hierarchical parser optimized for Checkmarx/OWASP ZAP HTML reports.
-    Safely handles string generation for Safari/Firefox DOM mapping frameworks.
+    Hierarchical HTML parser optimized for cross-browser memory stability.
+    Safely handles character streams for non-Chromium DOM architectures.
     """
     html_text = file_bytes.decode('utf-8', errors='ignore')
     soup = BeautifulSoup(html_text, 'html.parser')
@@ -86,8 +87,8 @@ def parse_zap_html(file_bytes):
             continue
             
         risk_num = int(match.group(1))
-        conf_num = int(match.group(2))
         
+        # Drop Low (1) and Informational (0) findings immediately
         if risk_num <= 1:
             continue
             
@@ -95,7 +96,7 @@ def parse_zap_html(file_bytes):
         conf_map = {3: "High", 2: "Medium", 1: "Low"}
         
         risk_val = risk_map.get(risk_num, "Medium")
-        conf_val = conf_map.get(conf_num, "Low")
+        conf_val = conf_map.get(int(match.group(2)), "Low")
         
         h5_elements = r_group.find_all('h5')
         for h5 in h5_elements:
@@ -152,7 +153,7 @@ def parse_zap_html(file_bytes):
                     
     return pd.DataFrame(zap_rows)
 
-# --- Streamlit Configuration ---
+# --- Streamlit Frame Settings ---
 st.set_page_config(page_title="Vulnerability Follow-up Plan Hub", layout="wide")
 st.title("Consolidated Security Scan Follow-up Plan Generator")
 st.write("Upload your files into their respective categories below. The tool compiles data seamlessly into the target layout.")
@@ -193,7 +194,7 @@ with col1:
         for f in uploaded_nessus:
             if f.name not in st.session_state["logged_nessus_files"]:
                 try:
-                    # Browser-safe cross-platform chunk reading
+                    # Non-Chromium Safe Input Streaming Architecture
                     bytes_data = f.read()
                     string_io = io.StringIO(bytes_data.decode('utf-8', errors='ignore'))
                     temp_df = pd.read_csv(string_io, dtype={"Host": str, "Port": str})
@@ -267,7 +268,11 @@ else:
         
         if not nessus_df.empty:
             nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
+            
+            # CHRONOLOGICAL CHOSEN RANGE: Sort descending to ensure the absolute most recent patch overrides historical iterations
             nessus_df = nessus_df.sort_values(by=["Host", "Protocol", "Port", "Family", "Ver_Tuple"], ascending=[True, True, True, True, False])
+            
+            # Safely drop old patch versions, keeping only the highest chronological entry
             deduped_nessus = nessus_df.drop_duplicates(subset=["Host", "Protocol", "Port", "Family"], keep="first")
             
             grouped_nessus = deduped_nessus.groupby(["Protocol", "Port", "Name"], dropna=False)
@@ -334,6 +339,7 @@ else:
         ws = wb.active
         ws.title = "Follow-up Plan"
         
+        # Merge top headers without passing border metrics
         ws.merge_cells("D1:H1")
         ws["D1"].value = "Follow-up Plan"
         ws["D1"].alignment = Alignment(horizontal="left", vertical="center")
@@ -397,9 +403,11 @@ else:
         center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
         left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
         
+        # Configure solid thin borders for standard tracking blocks
         thin_border_side = Side(style='thin', color='BFBFBF')
         grid_border = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
         
+        # Run grid tracing strictly from row 3 down to the final populated row (Columns C through V)
         for row in ws.iter_rows(min_row=3, max_row=total_rows_count + 3, min_col=3, max_col=22):
             for cell in row:
                 cell.border = grid_border
