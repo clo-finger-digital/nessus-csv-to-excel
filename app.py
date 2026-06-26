@@ -11,17 +11,15 @@ from openpyxl.styles import Alignment, Border, Side
 def parse_version_string(v_str):
     """
     Chronological sorting helper that extracts calendar years, month phases,
-    and semantic versions from vulnerability text strings.
+    and semantic versions from vulnerability text strings. Safe across all browser JS engines.
     """
     v_str = str(v_str).strip()
     
-    # Chronological month mapping configuration
     months = {
-        "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "jack": 6,
-        "june": 6, "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
+        "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6, 
+        "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
     }
     
-    # Look for patterns like (April 2026 CPU) or (July 2025 CPU)
     date_match = re.search(r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b', v_str, re.IGNORECASE)
     if date_match:
         m_name, year_val = date_match.groups()
@@ -38,18 +36,16 @@ def parse_version_string(v_str):
 
 def get_vulnerability_family_and_version(name_str):
     """
-    Normalizes vulnerability strings by separating invariant technical platform names 
+    Normalizes vulnerability strings by separating invariant platform names 
     from variant patch date cycles or application versions.
     """
     name_str = str(name_str).strip()
     
-    # Isolate explicit inequality constraints cleanly
     if '<' in name_str:
         family = name_str.split('<')[0].strip()
     elif '<=' in name_str:
         family = name_str.split('<=')[0].strip()
     else:
-        # Standardize calendar date indicators
         date_pattern = r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b'
         if re.search(date_pattern, name_str, re.IGNORECASE):
             family = re.sub(date_pattern, "[VERSION]", name_str, flags=re.IGNORECASE)
@@ -59,9 +55,8 @@ def get_vulnerability_family_and_version(name_str):
             for t in tokens:
                 family = family.replace(t, "[VERSION]")
                 
-    # Extract version markers for highest rank valuation
     all_tokens = re.findall(r'\b\d+(?:\.\d+)+[a-z]*\b', name_str, re.IGNORECASE)
-    date_tokens = re.findall(r'\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b', name_str, re.IGNORECASE)
+    date_tokens = re.findall(r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b', name_str, re.IGNORECASE)
     
     if date_tokens:
         max_version = parse_version_string(date_tokens[0])
@@ -75,9 +70,8 @@ def get_vulnerability_family_and_version(name_str):
 
 def parse_zap_html(file_bytes):
     """
-    Hierarchical parser optimized for Checkmarx/OWASP ZAP HTML report architectures.
-    Decodes strings directly and references native list IDs to avoid parsing anomalies.
-    Applies direct filtering to discard Low or Informational risks immediately.
+    Hierarchical parser optimized for Checkmarx/OWASP ZAP HTML reports.
+    Safely handles string generation for Safari/Firefox DOM mapping frameworks.
     """
     html_text = file_bytes.decode('utf-8', errors='ignore')
     soup = BeautifulSoup(html_text, 'html.parser')
@@ -94,7 +88,6 @@ def parse_zap_html(file_bytes):
         risk_num = int(match.group(1))
         conf_num = int(match.group(2))
         
-        # Skip processing entirely if ZAP Risk is Low (1) or Informational (0)
         if risk_num <= 1:
             continue
             
@@ -159,7 +152,7 @@ def parse_zap_html(file_bytes):
                     
     return pd.DataFrame(zap_rows)
 
-# --- Streamlit Shell Configurations ---
+# --- Streamlit Configuration ---
 st.set_page_config(page_title="Vulnerability Follow-up Plan Hub", layout="wide")
 st.title("Consolidated Security Scan Follow-up Plan Generator")
 st.write("Upload your files into their respective categories below. The tool compiles data seamlessly into the target layout.")
@@ -200,12 +193,17 @@ with col1:
         for f in uploaded_nessus:
             if f.name not in st.session_state["logged_nessus_files"]:
                 try:
-                    temp_df = pd.read_csv(f, dtype={"Host": str, "Port": str})
+                    # Browser-safe cross-platform chunk reading
+                    bytes_data = f.read()
+                    string_io = io.StringIO(bytes_data.decode('utf-8', errors='ignore'))
+                    temp_df = pd.read_csv(string_io, dtype={"Host": str, "Port": str})
                     temp_df["Source_Type"] = "Nessus"
+                    
                     headers = ["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"]
                     for h in headers:
                         if h not in temp_df.columns:
                             temp_df[h] = ""
+                            
                     st.session_state["nessus_dataset"] = pd.concat([st.session_state["nessus_dataset"], temp_df[headers]], ignore_index=True)
                     st.session_state["logged_nessus_files"].add(f.name)
                     new_nessus = True
@@ -224,10 +222,12 @@ with col2:
                 try:
                     file_bytes = f.read()
                     temp_df = parse_zap_html(file_bytes)
+                    
                     headers = ["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"]
                     for h in headers:
                         if h not in temp_df.columns:
                             temp_df[h] = ""
+                            
                     st.session_state["zap_dataset"] = pd.concat([st.session_state["zap_dataset"], temp_df[headers]], ignore_index=True)
                     st.session_state["logged_zap_files"].add(f.name)
                     new_zap = True
@@ -266,13 +266,8 @@ else:
         nessus_df = nessus_df[~nessus_df["Risk_Cleaned"].str.lower().isin(["none", "informational", "0", "nan", ""])]
         
         if not nessus_df.empty:
-            # Group variants by computing family and version details for each item
             nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
-            
-            # CHRONOLOGICAL DE-DUPLICATION: Sort by Host details, Protocol name, Port number, invariant family, and descending version chronology
             nessus_df = nessus_df.sort_values(by=["Host", "Protocol", "Port", "Family", "Ver_Tuple"], ascending=[True, True, True, True, False])
-            
-            # Drop obsolete historical entries and retain only the most recent version
             deduped_nessus = nessus_df.drop_duplicates(subset=["Host", "Protocol", "Port", "Family"], keep="first")
             
             grouped_nessus = deduped_nessus.groupby(["Protocol", "Port", "Name"], dropna=False)
@@ -299,7 +294,6 @@ else:
         zap_df = zap_df.dropna(subset=["Risk", "Host", "Name"])
         zap_df = zap_df[~zap_df["Name"].str.contains(r"certificate", case=False, na=False)]
         zap_df = zap_df[~zap_df["Name"].str.contains(r"icmp.*timestamp", case=False, na=False)]
-        
         zap_df = zap_df[~zap_df["Risk"].str.lower().isin(["low", "none", "informational", "0", "nan", ""])]
         
         if not zap_df.empty:
@@ -313,11 +307,7 @@ else:
                 conf_str = str(first_row["Confidence_Str"]).lower()
                 
                 impact = 3 if 'high' in r_lower or 'critical' in r_lower else (2 if 'medium' in r_lower else 1)
-                
-                if 'high' in conf_str or 'confirmed' in conf_str:
-                    likelihood = 2
-                else:
-                    likelihood = 1
+                likelihood = 2 if ('high' in conf_str or 'confirmed' in conf_str) else 1
                 
                 processed_tracks.append({
                     "Source": "ZAP", "System/Asset ID": urls_str, "Protocol": "Nil", "Port": "Nil",
@@ -344,7 +334,6 @@ else:
         ws = wb.active
         ws.title = "Follow-up Plan"
         
-        # Format the title layout without border configurations
         ws.merge_cells("D1:H1")
         ws["D1"].value = "Follow-up Plan"
         ws["D1"].alignment = Alignment(horizontal="left", vertical="center")
@@ -408,16 +397,12 @@ else:
         center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
         left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
         
-        # Setup clean thin grey line borders for data cells
         thin_border_side = Side(style='thin', color='BFBFBF')
         grid_border = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
         
-        # Traverse entire data grid starting strictly from the header down to the last data row (Columns C through V)
         for row in ws.iter_rows(min_row=3, max_row=total_rows_count + 3, min_col=3, max_col=22):
             for cell in row:
-                # Apply solid thin borders to every cell in the grid
                 cell.border = grid_border
-                
                 if cell.column in [3, 5, 6, 8, 12, 13, 14, 15, 16]:
                     cell.alignment = center_align
                 else:
