@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
-    <title>Nessus & ZAP Follow-up Plan Hub</title>
+    <title>Security Scan Follow-up Plan Hub</title>
     <link rel="stylesheet" href="https://unpkg.com/@stlite/mountable@0.58.0/build/stlite.css" />
   </head>
   <body>
@@ -13,6 +13,7 @@
     <script src="https://unpkg.com/@stlite/mountable@0.58.0/build/stlite.js"></script>
     <script>
       stlite.mount({
+        // Combined engine requirements to boot an immutable virtual python runtime inside Firefox/Safari
         requirements: ["pandas", "openpyxl", "beautifulsoup4"], 
         entrypoint: "app.py",
         files: {
