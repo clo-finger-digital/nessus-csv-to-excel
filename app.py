@@ -152,7 +152,7 @@ def parse_zap_html(file_bytes):
                     
     return pd.DataFrame(zap_rows)
 
-# --- Streamlit Shell Configurations ---
+# --- Streamlit Frame Settings ---
 st.set_page_config(page_title="Vulnerability Follow-up Plan Hub", layout="wide")
 st.title("Consolidated Security Scan Follow-up Plan Generator")
 st.write("Upload your files into their respective categories below. The tool compiles data seamlessly into the target layout.")
@@ -268,7 +268,7 @@ else:
         if not nessus_df.empty:
             nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
             
-            # Sort descending to guarantee the most recent patch cycle (e.g. April 2026) wins de-duplication
+            # Sort descending to guarantee the absolute most recent patch overrides historical iterations
             nessus_df = nessus_df.sort_values(by=["Host", "Protocol", "Port", "Family", "Ver_Tuple"], ascending=[True, True, True, True, False])
             
             # Safely drop old patch versions, keeping only the highest chronological entry
@@ -402,11 +402,11 @@ else:
         center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
         left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
         
-        # Configure solid thin borders for the grid layout
-        thin_border_side = Side(style='thin', color='BFBFBF')
+        # --- CHANGED: Color hex changed to '000000' for clean solid black lines ---
+        thin_border_side = Side(style='thin', color='000000')
         grid_border = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
         
-        # Apply solid thin borders starting strictly at Row 3 (the data headers) down to the bottom cell row
+        # Apply solid thin black borders starting strictly at Row 3 (the data headers) down to the bottom cell row
         for row in ws.iter_rows(min_row=3, max_row=total_rows_count + 3, min_col=3, max_col=22):
             for cell in row:
                 cell.border = grid_border
