@@ -327,7 +327,7 @@ else:
                         else:
                             deduped_rows.append(row)
                     else:
-                        continue
+                        deduped_rows.append(row)
                         
             deduped_nessus = pd.DataFrame(deduped_rows) if deduped_rows else pd.DataFrame()
             
