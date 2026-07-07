@@ -70,38 +70,33 @@ def parse_version_string(v_str):
     date_match = re.search(r'\\b(january|february|march|april|may|june|july|august|september|october|november|december)\\s+(\\d{4})\\b', v_str, re.IGNORECASE)
     if date_match:
         m_name, year_val = date_match.groups()
-        return (int(year_val), months.get(m_name.lower(), 0), 0, '')
+        return (int(year_val), months.get(m_name.lower(), 0), 0.0, 0.0)
         
     match = re.match(r'^(\\d+(?:\\.\\d+)*)([a-z]*)$', v_str, re.IGNORECASE)
     if match:
         nums_str, letters = match.groups()
-        nums = tuple(int(x) for x in nums_str.split('.'))
-        letters = letters.lower()
-        return (0, 0, nums, letters)
-    return (0, 0, (), '')
+        nums = [float(x) for x in nums_str.split('.')]
+        major = nums[0] if len(nums) > 0 else 0.0
+        minor = nums[1] if len(nums) > 1 else 0.0
+        patch = nums[2] if len(nums) > 2 else 0.0
+        return (int(major), int(minor), patch, 0.0)
+    return (0, 0, 0.0, 0.0)
 
 def get_vulnerability_family_and_version(name_str):
     name_str = str(name_str).strip()
     
-    # --- STAGE 1: EXPLICIT .NET CORE CHECK ---
-    # Catch .NET Core specific naming trees and attach chronological/version metadata
+    # --- CRITICAL RESTRICTED .NET CORE MATCHER ---
     if '.net core' in name_str.lower():
         family = "Microsoft .NET Core Runtime and SDK Family [VERSION]"
+        is_net_8 = 1.0 if ('8.0' in name_str or '.net 8' in name_str.lower()) else 0.0
         
-        # Check if it specifies the .NET 8 upgrade line
-        is_net_8 = '8.0' in name_str or '.net 8' in name_str.lower()
-        
-        # Try parsing the text date tokens (e.g., 'January 2025' or 'July 2024')
         date_tokens = re.findall(r'\\b(january|february|march|april|may|june|july|august|september|october|november|december)\\s+\\d{4}\\b', name_str, re.IGNORECASE)
-        
         if date_tokens:
-            parsed_date = parse_version_string(date_tokens[0]) # Returns (Year, Month, 0, '')
-            # Tuple shape: (Is_Net_8_Flag, Year, Month)
-            # This structures sorting so that .NET 8 flags group up natively but preserve real dates
-            max_version = (1 if is_net_8 else 0, parsed_date[0], parsed_date[1], 'net_core_item')
-            return family, max_version
+            parsed_date = parse_version_string(date_tokens[0])
+            # Return uniform 4-element tuple of numbers: (Year, Month, Net8_Flag, Identifier_Flag)
+            return family, (parsed_date[0], parsed_date[1], is_net_8, 1.0)
             
-    # --- STAGE 2: STANDARD CLASSIFICATION ROUTINE ---
+    # --- STANDARD PARSING LOGIC ---
     if '<' in name_str:
         family = name_str.split('<')[0].strip()
     elif '<=' in name_str:
@@ -120,14 +115,14 @@ def get_vulnerability_family_and_version(name_str):
     date_tokens = re.findall(r'\\b(january|february|march|april|may|june|july|august|september|october|november|december)\\s+\\d{4}\\b', name_str, re.IGNORECASE)
     
     if date_tokens:
-        max_version = parse_version_string(date_tokens[0])
+        parsed_date = parse_version_string(date_tokens[0])
+        return family, (parsed_date[0], parsed_date[1], 0.0, 0.0)
     elif all_tokens:
         max_token = max(all_tokens, key=parse_version_string)
-        max_version = parse_version_string(max_token)
+        parsed_ver = parse_version_string(max_token)
+        return family, (parsed_ver[0], parsed_ver[1], parsed_ver[2], 0.0)
     else:
-        max_version = (0, 0, (), '')
-        
-    return family, max_version
+        return family, (0, 0, 0.0, 0.0)
 
 def parse_zap_html(file_bytes):
     html_text = file_bytes.decode('utf-8', errors='ignore')
@@ -299,44 +294,42 @@ else:
         if not nessus_df.empty:
             nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
             
-            # --- CUSTOM RE-SORTING LAYER FOR STRICT .NET CORE UPGRADE LOGIC ---
-            # Sorts by asset pathways, then by family. For .NET Core, items with the .NET 8 flag
-            # are grouped; sorting by year and month descending puts the absolute newest items on top.
-            nessus_df["Sort_Is_NetCore"] = nessus_df["Ver_Tuple"].apply(lambda x: 1 if (isinstance(x, tuple) and len(x) == 4 and x[3] == 'net_core_item') else 0)
+            # Pure Numeric Sorting Array to Prevent WebAssembly Lexicographical TypeErrors
+            nessus_df["Sort_V1"] = nessus_df["Ver_Tuple"].apply(lambda x: float(x[0]))
+            nessus_df["Sort_V2"] = nessus_df["Ver_Tuple"].apply(lambda x: float(x[1]))
+            nessus_df["Sort_V3"] = nessus_df["Ver_Tuple"].apply(lambda x: float(x[2]))
+            nessus_df["Sort_V4"] = nessus_df["Ver_Tuple"].apply(lambda x: float(x[3]))
             
-            # Primary structural sort
             nessus_df = nessus_df.sort_values(
-                by=["Host", "Protocol", "Port", "Family", "Sort_Is_NetCore", "Ver_Tuple"], 
-                ascending=[True, True, True, True, True, False]
+                by=["Host", "Protocol", "Port", "Family", "Sort_V4", "Sort_V1", "Sort_V2"], 
+                ascending=[True, True, True, True, True, False, False]
             )
             
-            # Drop entries where the family matches, but apply a smart conditional evaluation block for .NET Core
+            # Smart Custom Conditional Deduplication Pipeline for .NET Core
             deduped_rows = []
             seen_families = {}
             
             for idx, row in nessus_df.iterrows():
                 asset_key = f"{row['Host']}_{row['Protocol']}_{row['Port']}"
                 family_key = f"{asset_key}_{row['Family']}"
+                tup = row["Ver_Tuple"]
                 
                 if family_key not in seen_families:
-                    seen_families[family_key] = row["Ver_Tuple"]
+                    seen_families[family_key] = tup
                     deduped_rows.append(row)
                 else:
-                    # If this is a .NET Core family match, check if the already stored record is .NET 8 with a newer date
-                    existing_tuple = seen_families[family_key]
-                    current_tuple = row["Ver_Tuple"]
-                    
-                    if (isinstance(existing_tuple, tuple) and len(existing_tuple) == 4 and existing_tuple[3] == 'net_core_item'):
-                        # If the top item is .NET 8 (flag == 1) and its date is newer or equal, drop this older generic item
-                        # (Since it's sorted descending by date, the top item is already the newest)
-                        if existing_tuple[0] == 1 and (existing_tuple[1], existing_tuple[2]) >= (current_tuple[1], current_tuple[2]):
-                            continue
+                    existing_tup = seen_families[family_key]
+                    # If this row belongs to a .NET Core family (indicated by structural marker flag x[3] == 1.0)
+                    if tup[3] == 1.0 and existing_tup[3] == 1.0:
+                        # Check if the highest sorted item is .NET 8 (flag == 1.0) AND possesses a newer or equal date
+                        if existing_tup[2] == 1.0 and (existing_tup[0], existing_tup[1]) >= (tup[0], tup[1]):
+                            continue  # Drop old generic entry safely
                         else:
                             deduped_rows.append(row)
                     else:
                         continue
                         
-            deduped_nessus = pd.DataFrame(deduped_rows)
+            deduped_nessus = pd.DataFrame(deduped_rows) if deduped_rows else pd.DataFrame()
             
             if not deduped_nessus.empty:
                 for _, row in deduped_nessus.iterrows():
@@ -417,7 +410,6 @@ else:
                 "Impact": impact, "Likelihood": likelihood, "Output": outputs_combined, "Reference": reference
             })
             
-        # Compile numeric risk ratings across items
         for r in processed_tracks:
             r["Risk Rating"] = r["Impact"] * r["Likelihood"] * systems_tier
             if r["Risk Rating"] == 1:
