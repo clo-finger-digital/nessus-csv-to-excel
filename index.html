@@ -85,7 +85,8 @@ def parse_version_string(v_str):
 def get_vulnerability_family_and_version(name_str):
     name_str = str(name_str).strip()
     
-    # --- CRITICAL RESTRICTED .NET CORE MATCHER ---
+    # --- STEP 1: STRENGTHENED .NET CORE MATCHER ---
+    # Captures explicit .NET Core installations while isolating framework lines
     if '.net core' in name_str.lower():
         family = "Microsoft .NET Core Runtime and SDK Family [VERSION]"
         is_net_8 = 1.0 if ('8.0' in name_str or '.net 8' in name_str.lower()) else 0.0
@@ -93,10 +94,10 @@ def get_vulnerability_family_and_version(name_str):
         date_tokens = re.findall(r'\\b(january|february|march|april|may|june|july|august|september|october|november|december)\\s+\\d{4}\\b', name_str, re.IGNORECASE)
         if date_tokens:
             parsed_date = parse_version_string(date_tokens[0])
-            # Return uniform 4-element tuple of numbers: (Year, Month, Net8_Flag, Identifier_Flag)
+            # Returns uniform float array layout: (Year, Month, Net8_Flag, Identifier_Marker)
             return family, (parsed_date[0], parsed_date[1], is_net_8, 1.0)
             
-    # --- STANDARD PARSING LOGIC ---
+    # --- STEP 2: STANDARD CLASSIFICATION BACKEND ---
     if '<' in name_str:
         family = name_str.split('<')[0].strip()
     elif '<=' in name_str:
@@ -294,18 +295,19 @@ else:
         if not nessus_df.empty:
             nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
             
-            # Pure Numeric Sorting Array to Prevent WebAssembly Lexicographical TypeErrors
+            # Extract primitive numbers for multi-index structural sorting inside Pandas
             nessus_df["Sort_V1"] = nessus_df["Ver_Tuple"].apply(lambda x: float(x[0]))
             nessus_df["Sort_V2"] = nessus_df["Ver_Tuple"].apply(lambda x: float(x[1]))
             nessus_df["Sort_V3"] = nessus_df["Ver_Tuple"].apply(lambda x: float(x[2]))
             nessus_df["Sort_V4"] = nessus_df["Ver_Tuple"].apply(lambda x: float(x[3]))
             
+            # Order chronological strings descending to guarantee that the newest patch sits at the top of the loop
             nessus_df = nessus_df.sort_values(
-                by=["Host", "Protocol", "Port", "Family", "Sort_V4", "Sort_V1", "Sort_V2"], 
-                ascending=[True, True, True, True, True, False, False]
+                by=["Host", "Protocol", "Port", "Family", "Sort_V3", "Sort_V1", "Sort_V2"], 
+                ascending=[True, True, True, True, False, False, False]
             )
             
-            # Smart Custom Conditional Deduplication Pipeline for .NET Core
+            # --- FIXED DEDUPLICATION LOOP MATRIX ---
             deduped_rows = []
             seen_families = {}
             
@@ -319,14 +321,16 @@ else:
                     deduped_rows.append(row)
                 else:
                     existing_tup = seen_families[family_key]
-                    # If this row belongs to a .NET Core family (indicated by structural marker flag x[3] == 1.0)
+                    
+                    # Apply date replacement loop IF AND ONLY IF both matching rows are .NET Core targets
                     if tup[3] == 1.0 and existing_tup[3] == 1.0:
-                        # Check if the highest sorted item is .NET 8 (flag == 1.0) AND possesses a newer or equal date
+                        # Drop generic entry if the already saved item is .NET 8 (flag == 1.0) and contains a newer date
                         if existing_tup[2] == 1.0 and (existing_tup[0], existing_tup[1]) >= (tup[0], tup[1]):
-                            continue  # Drop old generic entry safely
+                            continue
                         else:
                             deduped_rows.append(row)
                     else:
+                        # STANDARD FIX: All normal vulnerabilities bypass date replacement checks and append properly
                         deduped_rows.append(row)
                         
             deduped_nessus = pd.DataFrame(deduped_rows) if deduped_rows else pd.DataFrame()
