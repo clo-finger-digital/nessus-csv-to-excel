@@ -6,7 +6,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
     <title>Security Scan Follow-up Plan Hub</title>
     
-    <!-- Firefox & Safari Thread Isolation Sandbox Enforcer -->
     <script>
       if ('serviceWorker' in navigator) {
         const workerScript = `
@@ -36,7 +35,7 @@
           if (reg.active && !window.crossOriginIsolated) {
             window.location.reload();
           }
-        }).catch(err => console.error("Sandbox failure:", err));
+        }).catch(err => console.error("WASM Isolation Failure:", err));
       }
     </script>
 
@@ -57,7 +56,6 @@ import pandas as pd
 import openpyxl
 import io
 import re
-from datetime import datetime
 from bs4 import BeautifulSoup
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment, Border, Side
@@ -175,7 +173,7 @@ def parse_zap_html(file_bytes):
 
 st.set_page_config(page_title="Vulnerability Follow-up Plan Hub", layout="wide")
 st.title("Consolidated Security Scan Follow-up Plan Generator")
-st.write("Upload your files below to compile them seamlessly into your target layout.")
+st.write("Upload your security assessment artifacts. Data compiling handles structural alignment natively inside your current browser tab.")
 
 if "nessus_dataset" not in st.session_state:
     st.session_state["nessus_dataset"] = pd.DataFrame(columns=["Source_Type", "Risk", "Host", "Protocol", "Port", "Name", "Synopsis", "Solution", "See Also", "Confidence_Str", "Output"])
@@ -264,8 +262,9 @@ else:
 
     nessus_df = st.session_state["nessus_dataset"].copy()
     zap_df = st.session_state["zap_dataset"].copy()
-    processed_tracks = []
+    raw_vulnerabilities = []
     
+    # --- Parse Nessus Context ---
     if not nessus_df.empty:
         for field in ["See Also", "Synopsis", "Solution", "Output", "Name", "Host"]:
             nessus_df[field] = nessus_df[field].fillna("").astype(str).str.strip()
@@ -279,32 +278,25 @@ else:
             nessus_df["Family"], nessus_df["Ver_Tuple"] = zip(*nessus_df["Name"].apply(get_vulnerability_family_and_version))
             nessus_df = nessus_df.sort_values(by=["Host", "Protocol", "Port", "Family", "Ver_Tuple"], ascending=[True, True, True, True, False])
             deduped_nessus = nessus_df.drop_duplicates(subset=["Host", "Protocol", "Port", "Family"], keep="first")
-            grouped_nessus = deduped_nessus.groupby(["Protocol", "Port", "Name"], dropna=False)
-            for (protocol, port, name), group in grouped_nessus:
-                first_row = group.iloc[0]
-                hosts_str = "\\n".join(sorted(group["Host"].unique()))
-                r_lower = str(first_row["Risk_Cleaned"]).lower()
-                
+            
+            for _, row in deduped_nessus.iterrows():
+                r_lower = str(row["Risk_Cleaned"]).lower()
                 if 'critical' in r_lower:
-                    impact = 3
-                    likelihood = 2
+                    impact, likelihood = 3, 2
                 elif 'high' in r_lower:
-                    impact = 2
-                    likelihood = 2
+                    impact, likelihood = 2, 2
                 elif 'medium' in r_lower:
-                    impact = 2
-                    likelihood = 1
+                    impact, likelihood = 2, 1
                 else:
-                    impact = 1
-                    likelihood = 1
-                
-                processed_tracks.append({
-                    "Source": "Nessus", "System/Asset ID": hosts_str, "Protocol": protocol, "Port": port,
-                    "Security Domain Area": "Operation Security", "Risk Name/Observation": name,
-                    "Vulnerability\\n/Threat": first_row["Synopsis"], "Action plan": first_row["Solution"],
-                    "Impact": impact, "Likelihood": likelihood, "Output": first_row["Output"], "Reference": first_row["See Also"]
+                    impact, likelihood = 1, 1
+                    
+                raw_vulnerabilities.append({
+                    "Source": "Nessus", "Host": row["Host"], "Protocol": row["Protocol"], "Port": row["Port"],
+                    "Family": row["Family"], "Name": row["Name"], "Synopsis": row["Synopsis"], "Solution": row["Solution"],
+                    "Impact": impact, "Likelihood": likelihood, "Output": row["Output"], "Reference": row["See Also"]
                 })
                 
+    # --- Parse ZAP Context ---
     if not zap_df.empty:
         for field in ["See Also", "Synopsis", "Solution", "Output", "Name", "Host", "Risk"]:
             zap_df[field] = zap_df[field].fillna("").astype(str).str.strip()
@@ -313,35 +305,63 @@ else:
         zap_df = zap_df[~zap_df["Name"].str.contains(r"icmp.*timestamp", case=False, na=False)]
         zap_df = zap_df[~zap_df["Risk"].str.lower().isin(["low", "none", "informational", "0", "nan", ""])]
         
-        if not zap_df.empty:
-            grouped_zap = zap_df.groupby(["Protocol", "Port", "Name"], dropna=False)
-            for (protocol, port, name), group in grouped_zap:
-                first_row = group.iloc[0]
-                urls_str = "\\n".join(sorted(group["Host"].unique()))
-                outputs_str = "\\n".join([out for out in group["Output"].unique() if out])
-                r_lower = str(first_row["Risk"]).lower()
-                conf_str = str(first_row["Confidence_Str"]).lower()
-                
-                if 'critical' in r_lower:
-                    impact = 3
-                elif 'high' in r_lower:
-                    impact = 2
-                elif 'medium' in r_lower:
-                    impact = 2
-                else:
-                    impact = 1
-                likelihood = 2 if ('high' in conf_str or 'confirmed' in conf_str) else 1
-                
-                processed_tracks.append({
-                    "Source": "ZAP", "System/Asset ID": urls_str, "Protocol": "Nil", "Port": "Nil",
-                    "Security Domain Area": "Operation Security", "Risk Name/Observation": name,
-                    "Vulnerability\\n/Threat": first_row["Synopsis"], "Action plan": first_row["Solution"],
-                    "Impact": impact, "Likelihood": likelihood, "Output": outputs_str, "Reference": first_row["See Also"]
-                })
-                
-    if not processed_tracks:
-        st.warning("No actionable vulnerabilities remaining after applying filters on current inputs.")
+        for _, row in zap_df.iterrows():
+            r_lower = str(row["Risk"]).lower()
+            conf_str = str(row["Confidence_Str"]).lower()
+            if 'critical' in r_lower:
+                impact = 3
+            elif 'high' in r_lower or 'medium' in r_lower:
+                impact = 2
+            else:
+                impact = 1
+            likelihood = 2 if ('high' in conf_str or 'confirmed' in conf_str) else 1
+            
+            raw_vulnerabilities.append({
+                "Source": "ZAP", "Host": row["Host"], "Protocol": "Nil", "Port": "Nil",
+                "Family": row["Name"], "Name": row["Name"], "Synopsis": row["Synopsis"], "Solution": row["Solution"],
+                "Impact": impact, "Likelihood": likelihood, "Output": row["Output"], "Reference": row["See Also"]
+            })
+
+    if not raw_vulnerabilities:
+        st.warning("No actionable vulnerabilities remaining after applying structural exclusions.")
     else:
+        # --- MULTI-SOCKET CONSOLIDATION ROUTINE ---
+        df_all = pd.DataFrame(raw_vulnerabilities)
+        processed_tracks = []
+        
+        # Group uniquely by invariant technical families, calculated metrics, and descriptions
+        grouped = df_all.groupby(["Source", "Family", "Synopsis", "Solution", "Impact", "Likelihood", "Reference"], dropna=False)
+        
+        for (source, family, synopsis, solution, impact, likelihood, reference), group in grouped:
+            unique_sockets = group.drop_duplicates(subset=["Host", "Protocol", "Port"])
+            is_singular = len(unique_sockets) == 1
+            
+            if is_singular:
+                # Rule 1: Singular issue retains standard address and raw ports
+                first_item = unique_sockets.iloc[0]
+                asset_id_val = str(first_item["Host"])
+                protocol_val = str(first_item["Protocol"])
+                port_val = str(first_item["Port"])
+            else:
+                # Rule 2: Aggregated issue combines targets inside Asset column and soft-wipes ports to "Nil"
+                socket_strings = []
+                for _, socket_row in unique_sockets.sort_values(by=["Host", "Port"]).iterrows():
+                    socket_strings.append(f"{socket_row['Host']} tcp {socket_row['Port']}")
+                asset_id_val = "\\n".join(socket_strings)
+                protocol_val = "Nil"
+                port_val = "Nil"
+                
+            outputs_combined = "\\n".join([out for out in group["Output"].unique() if out])
+            name_val = group.iloc[0]["Name"]
+            
+            processed_tracks.append({
+                "Source": source, "System/Asset ID": asset_id_val, "Protocol": protocol_val, "Port": port_val,
+                "Security Domain Area": "Operation Security", "Risk Name/Observation": name_val,
+                "Vulnerability\\n/Threat": synopsis, "Action plan": solution,
+                "Impact": impact, "Likelihood": likelihood, "Output": outputs_combined, "Reference": reference
+            })
+            
+        # Compile numeric risk ratings across items
         for r in processed_tracks:
             r["Risk Rating"] = r["Impact"] * r["Likelihood"] * systems_tier
             if r["Risk Rating"] == 1:
@@ -352,16 +372,18 @@ else:
                 r["Risk Rating/ Level"] = "Medium"
             else:
                 r["Risk Rating/ Level"] = "High"
-            
+                
         nessus_final = [r for r in processed_tracks if r["Source"] == "Nessus"]
         zap_final = [r for r in processed_tracks if r["Source"] == "ZAP"]
         nessus_final.sort(key=lambda x: x["Risk Rating"], reverse=True)
         zap_final.sort(key=lambda x: x["Risk Rating"], reverse=True)
         
+        # --- Generate Openpyxl Workbook Structure ---
         excel_buffer = io.BytesIO()
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Follow-up Plan"
+        ws.views.sheetView[0].showGridLines = True
         
         ws.merge_cells("D1:H1")
         ws["D1"].value = "Follow-up Plan"
@@ -420,7 +442,7 @@ else:
             ws.cell(row=current_write_row, column=22, value=r_data["Output"])
             current_write_row += 1
             
-        st.success(f"Processing Complete! Consolidated entries into {total_rows_count} unique tracking rows.")
+        st.success(f"Processing Complete! Compiled {total_rows_count} unique vulnerability tracks.")
         center_align = Alignment(horizontal="center", vertical="top", wrap_text=True)
         left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
         
@@ -436,7 +458,7 @@ else:
                     cell.alignment = left_align
                     
         column_widths = {
-            'C': 18, 'D': 25, 'E': 10, 'F': 10, 'G': 15, 'H': 18, 'I': 35, 'J': 45, 'K': 50, 
+            'C': 18, 'D': 32, 'E': 12, 'F': 12, 'G': 15, 'H': 18, 'I': 35, 'J': 45, 'K': 50, 
             'L': 18, 'M': 10, 'N': 10, 'O': 12, 'P': 12, 'Q': 15, 'R': 12, 'S': 20, 'T': 15, 'U': 30, 'V': 45
         }
         for col_letter, width in column_widths.items():
