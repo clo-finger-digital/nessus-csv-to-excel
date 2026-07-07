@@ -67,14 +67,14 @@ def parse_version_string(v_str):
         "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
     }
     
-    date_match = re.search(r'\\b(january|february|march|april|may|june|july|august|september|october|november|december)\\s+(\\d{4})\\b', v_str, re.IGNORECASE)
+    date_match = re.search(r'(january|february|march|april|may|june|july|august|september|october|november|december)\\s+(\\d{4})', v_str, re.IGNORECASE)
     if date_match:
         m_name, year_val = date_match.groups()
         return (int(year_val), months.get(m_name.lower(), 0), 0.0, 0.0)
         
-    match = re.match(r'^(\\d+(?:\\.\\d+)*)([a-z]*)$', v_str, re.IGNORECASE)
+    match = re.search(r'(\\d+(?:\\.\\d+)+)', v_str)
     if match:
-        nums_str, letters = match.groups()
+        nums_str = match.group(1)
         nums = [float(x) for x in nums_str.split('.')]
         major = nums[0] if len(nums) > 0 else 0.0
         minor = nums[1] if len(nums) > 1 else 0.0
@@ -84,30 +84,37 @@ def parse_version_string(v_str):
 
 def get_vulnerability_family_and_version(name_str):
     name_str = str(name_str).strip()
+    name_lower = name_str.lower()
     
-    # --- FIXED SEPARATE .NET CORE FAMILY BRANCHING RULES ---
-    if '.net core' in name_str.lower():
-        # Branch A: Explicit .NET 8 Core entries get isolated family mapping
-        if '8.0' in name_str or '.net 8' in name_str.lower():
+    # --- .NET CORE FINE-GRAINED SEPARATED TRACKING ENGINE ---
+    if '.net core' in name_lower:
+        # Branch A: Explicit .NET 8 Core items
+        if '8.0' in name_lower or '.net 8' in name_lower:
             family = "Microsoft .NET 8 Core Security Updates [VERSION]"
+            marker = 3.0
+        # Branch B: Text entries explicitly beginning with "Security Update"
+        elif 'security update' in name_lower:
+            family = "Security Update for Microsoft .NET Core [VERSION]"
             marker = 2.0
-        # Branch B: Generic .NET Core entries get their own isolated family mapping
+        # Branch C: Base installation updates (e.g., "Microsoft .NET Core (April 2026)")
         else:
-            family = "Microsoft .NET Core Security Updates [VERSION]"
+            family = "Microsoft .NET Core Installation Updates [VERSION]"
             marker = 1.0
             
-        date_tokens = re.findall(r'\\b(january|february|march|april|may|june|july|august|september|october|november|december)\\s+\\d{4}\\b', name_str, re.IGNORECASE)
-        if date_tokens:
-            parsed_date = parse_version_string(date_tokens[0])
+        date_match = re.search(r'(january|february|march|april|may|june|july|august|september|october|november|december)\\s+(\\d{4})', name_str, re.IGNORECASE)
+        if date_match:
+            parsed_date = parse_version_string(date_match.group(0))
             return family, (parsed_date[0], parsed_date[1], 0.0, marker)
+        else:
+            return family, (1999, 1, 0.0, marker)
             
-    # --- STANDARD VULNERABILITY CLASSIFICATION BACKEND ---
+    # --- STANDARD VULNERABILITY ARCHITECTURE BACKEND ---
     if '<' in name_str:
         family = name_str.split('<')[0].strip()
     elif '<=' in name_str:
         family = name_str.split('<=')[0].strip()
     else:
-        date_pattern = r'\\b(january|february|march|april|may|june|july|august|september|october|november|december)\\s+(\\d{4})\\b'
+        date_pattern = r'(january|february|march|april|may|june|july|august|september|october|november|december)\\s+(\\d{4})'
         if re.search(date_pattern, name_str, re.IGNORECASE):
             family = re.sub(date_pattern, "[VERSION]", name_str, flags=re.IGNORECASE)
         else:
@@ -116,11 +123,11 @@ def get_vulnerability_family_and_version(name_str):
             for t in tokens:
                 family = family.replace(t, "[VERSION]")
                 
+    date_match = re.search(r'(january|february|march|april|may|june|july|august|september|october|november|december)\\s+(\\d{4})', name_str, re.IGNORECASE)
     all_tokens = re.findall(r'\\b\\d+(?:\\.\\d+)+[a-z]*\\b', name_str, re.IGNORECASE)
-    date_tokens = re.findall(r'\\b(january|february|march|april|may|june|july|august|september|october|november|december)\\s+\\d{4}\\b', name_str, re.IGNORECASE)
     
-    if date_tokens:
-        parsed_date = parse_version_string(date_tokens[0])
+    if date_match:
+        parsed_date = parse_version_string(date_match.group(0))
         return family, (parsed_date[0], parsed_date[1], 0.0, 0.0)
     elif all_tokens:
         max_token = max(all_tokens, key=parse_version_string)
@@ -304,23 +311,22 @@ else:
             nessus_df["Sort_V3"] = nessus_df["Ver_Tuple"].apply(lambda x: float(x[2]))
             nessus_df["Sort_V4"] = nessus_df["Ver_Tuple"].apply(lambda x: float(x[3]))
             
-            # Group identical families and sort dates DESCENDING. The newest date hits the loop first.
+            # Pure chronological sort ensuring 2026 elements hit the unique filter map first
             nessus_df = nessus_df.sort_values(
                 by=["Host", "Protocol", "Port", "Family", "Sort_V1", "Sort_V2"], 
                 ascending=[True, True, True, True, False, False]
             )
             
-            # --- STRICT DEDUPLICATION AND RETENTION LOOP ---
+            # --- STAGE-RESTRICTED CHRONOLOGICAL RETENTION MAP ---
             deduped_rows = []
             seen_keys = set()
             
             for idx, row in nessus_df.iterrows():
-                # Compound signature ensures uniqueness across specific asset interfaces
                 asset_key = f"{row['Host']}_{row['Protocol']}_{row['Port']}"
                 family_id = f"{asset_key}_{row['Family']}"
                 
-                # Since the array is pre-sorted with the newest dates first, we accept
-                # the first occurrence and seamlessly drop all subsequent older records.
+                # Pre-sorting puts the newest date first, so the first match wins
+                # and all old duplicate rows are discarded.
                 if family_id not in seen_keys:
                     seen_keys.add(family_id)
                     deduped_rows.append(row)
