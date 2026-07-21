@@ -146,11 +146,9 @@ def parse_zap_html(file_bytes):
             continue
         risk_num = int(match.group(1))
         
-        # Capture critical/high/medium mappings based directly on ID parameters
         risk_map = {3: "High", 2: "Medium", 1: "Low", 0: "Informational"}
         risk_val = risk_map.get(risk_num, "Low")
         
-        # Process and include all records above informational baselines
         if risk_num < 1:
             continue
             
@@ -164,7 +162,7 @@ def parse_zap_html(file_bytes):
             tables = parent_li.find_all('table', class_='alerts-table')
             for table in tables:
                 row_data = {
-                    "Source_Type": "ZAP", "Risk": risk_val, "Confidence_Str": "", # Force ignored parameter mapping
+                    "Source_Type": "ZAP", "Risk": risk_val, "Confidence_Str": "", 
                     "Host": "GET https://localhost", "Protocol": "Nil", "Port": "Nil",
                     "Name": alert_title, "Synopsis": "", "Solution": "", "See Also": "", "Output": ""
                 }
@@ -358,7 +356,6 @@ else:
         for _, row in zap_df.iterrows():
             r_lower = str(row["Risk"]).lower()
             
-            # --- UNIFIED SCORING ALIGNMENT FOR ZAP VIA SEVERITY ---
             if 'critical' in r_lower:
                 impact, likelihood = 3, 2
             elif 'high' in r_lower:
@@ -453,6 +450,7 @@ else:
         ws.auto_filter.ref = f"C3:V{total_rows_count + 3}"
         current_write_row = 4
         
+        # Populate Nessus entries (V1, V2, V3...)
         for i, r_data in enumerate(nessus_final):
             ws.cell(row=current_write_row, column=3, value=f"V{i + 1}")
             ws.cell(row=current_write_row, column=4, value=r_data["System/Asset ID"])
@@ -471,8 +469,9 @@ else:
             ws.cell(row=current_write_row, column=22, value=r_data["Output"])
             current_write_row += 1
             
+        # Populate OWASP ZAP entries (W1, W2, W3...)
         for i, r_data in enumerate(zap_final):
-            ws.cell(row=current_write_row, column=3, value=f"A{i + 1}")
+            ws.cell(row=current_write_row, column=3, value=f"W{i + 1}")
             ws.cell(row=current_write_row, column=4, value=r_data["System/Asset ID"])
             ws.cell(row=current_write_row, column=5, value=r_data["Protocol"])
             ws.cell(row=current_write_row, column=6, value=r_data["Port"])
